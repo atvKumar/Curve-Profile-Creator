@@ -1,0 +1,27 @@
+schema_version = "1.0.0"
+
+id = "curve_profile_creator"
+version = "0.4.2"
+name = "Curve Profile Creator"
+tagline = "Build parametric curve profiles and sweep them along edges"
+maintainer = "M.Kumaran"
+support = "https://github.com/atvKumar/Curve-Profile-Creator/issues"
+type = "add-on"
+
+blender_version_min = "4.3.0"
+
+license = [
+  "SPDX:GPL-3.0-or-later",
+]
+
+
+[permissions]
+files = "Save and load CPC profile presets and thumbnails"
+
+[build]
+paths_exclude_pattern = [
+  "__pycache__/",
+  "/.git/",
+  "/*.zip",
+  "*.pyc",
+]
