@@ -12,6 +12,8 @@
 - Separates the library metadata index from preview loading so only the current filtered result set loads PNG icons.
 - Existing 0.4.0–0.4.2 presets remain valid and appear under `Uncategorized` until classified.
 - Keeps PNG thumbnail generation in 0.4.3; WebP is reserved for 0.4.4.
+- **Edit Active Profile** now prefers the directly selected committed CPC profile and synchronizes the Active Profile pointer automatically.
+- Starting profile editing now activates viewport draw handlers lazily when Viewport Guides is enabled, so reopened `.blend` files do not require cycling the toggle off/on.
 - No intended modelling, transform, connectivity, Commit/Recommit, or sweep behavior changes.
 
 ## 0.4.2 — First Extensions Platform Release
@@ -27,4 +29,4 @@
 ## 0.4.1 — Frozen Baseline Cleanup
 
 - Declared 0.4.0 the persistence floor and removed older migration/compatibility machinery.
-- Retained recipe schema 11+, preset format v1, normalized Matrix transforms, User Profiles, and all validated modelling behavior.
+- Retained recipe schema 11+, preset format v1, normalized Matrix transforms, User Profiles and all validated modelling behavior.

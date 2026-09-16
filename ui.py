@@ -471,11 +471,28 @@ class CPC_PT_Main(Panel):
         box.operator("cpc.save_user_profile", text="Save Profile Preset", icon='ADD')
 
         box.separator()
+        category_row = box.row(align=True)
+        category_row.prop(settings, "user_profile_category_filter", text="Category")
+        category_row.operator("cpc.add_user_profile_category", text="", icon='ADD')
+        manage = category_row.row(align=True)
+        manage.enabled = user_profiles.category_filter_is_real(settings)
+        manage.operator("cpc.rename_user_profile_category", text="Manage")
+
+        box.prop(settings, "user_profile_search", text="Search", icon='VIEWZOOM')
+        if str(getattr(settings, "user_profile_search", "") or "").strip():
+            global_hint = box.row()
+            global_hint.enabled = False
+            global_hint.label(text="Global search • Category filter is temporarily ignored")
+
         box.prop(settings, "user_profile_selected", text="Preset")
         try:
             box.template_icon_view(settings, "user_profile_selected", show_labels=True, scale=5.0, scale_popup=5.0)
         except TypeError:
             box.template_icon_view(settings, "user_profile_selected", show_labels=True)
+
+        count = box.row()
+        count.enabled = False
+        count.label(text=f"{user_profiles.visible_count()} of {user_profiles.total_count()} profiles")
 
         metadata = user_profiles.selected_metadata(settings)
         if metadata:
@@ -486,8 +503,22 @@ class CPC_PT_Main(Panel):
             else:
                 info.label(text="Static Curve preset • geometry preserved", icon='CURVE_DATA')
 
+            classification = box.row()
+            classification.enabled = False
+            category = metadata.get("category") or user_profiles.CATEGORY_UNCATEGORIZED_LABEL
+            tags = metadata.get("tags", []) or []
+            suffix = f" • {', '.join(tags[:3])}" if tags else ""
+            classification.label(text=f"{category}{suffix}", icon='BOOKMARKS')
+
+            source_bits = [value for value in (metadata.get("source_collection"), metadata.get("source_reference")) if value]
+            if source_bits:
+                source_row = box.row()
+                source_row.enabled = False
+                source_row.label(text="Source: " + " • ".join(source_bits), icon='INFO')
+
         row = box.row(align=True)
         row.operator("cpc.load_user_profile", text="Load", icon='IMPORT')
+        row.operator("cpc.edit_user_profile_info", text="Edit Info", icon='PREFERENCES')
         row.operator("cpc.refresh_user_profiles", text="Refresh", icon='FILE_REFRESH')
         row.operator("cpc.delete_user_profile", text="Delete", icon='TRASH')
 
@@ -500,6 +531,9 @@ class CPC_PT_Main(Panel):
             note = advanced.row()
             note.enabled = False
             note.label(text=".cpcprofile JSON is authoritative; PNG is a regenerable thumbnail")
+            registry = advanced.row()
+            registry.enabled = False
+            registry.label(text="cpc_library.json stores only user-managed category names")
 
     def _draw_sweep(self, layout, context, settings):
         box = layout.box()

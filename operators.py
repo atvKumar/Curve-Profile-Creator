@@ -372,7 +372,7 @@ def _restore_recipe_parts(context, profile, *, placement_matrix=None):
 
     recipe_version = int(profile.get("cpc_recipe_version", 0))
     if recipe_version < profile_presets.MIN_PARAMETRIC_RECIPE_SCHEMA:
-        return [], [f"CPC 0.4.2 supports recipe schema {profile_presets.MIN_PARAMETRIC_RECIPE_SCHEMA} or newer (0.4.0 baseline)"]
+        return [], [f"CPC 0.4.3 supports recipe schema {profile_presets.MIN_PARAMETRIC_RECIPE_SCHEMA} or newer (0.4.0 baseline)"]
 
     try:
         placement = (
@@ -2154,24 +2154,53 @@ class CPC_OT_CommitProfile(Operator):
         return {'FINISHED'}
 
 
+def _reopen_profile_candidate(context, settings=None):
+    """Prefer a directly selected committed CPC profile, then fall back to Active Profile.
+
+    Direct viewport selection is the natural editing workflow.  The separate
+    Active Profile pointer remains useful for sweep operations, so editing only
+    overrides it when the active Blender object is itself an editable committed
+    CPC profile.
+    """
+    obj = getattr(context, "object", None)
+    if (
+        obj
+        and obj.type == 'CURVE'
+        and obj.get("cpc_profile")
+        and not obj.get("cpc_part")
+        and obj.get("cpc_recipe_json")
+    ):
+        return obj
+
+    settings = settings or (getattr(context.scene, "cpc_settings", None) if context.scene else None)
+    profile = getattr(settings, "active_profile", None) if settings else None
+    if profile and profile.type == 'CURVE' and profile.get("cpc_profile") and profile.get("cpc_recipe_json"):
+        return profile
+    return None
+
+
 class CPC_OT_ReopenProfile(Operator):
     bl_idname = "cpc.reopen_profile"
     bl_label = "Edit Active Profile"
-    bl_description = "Reopen the active committed profile as its original parametric construction parts"
+    bl_description = "Reopen the selected or active committed profile as its original parametric construction parts"
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
     def poll(cls, context):
         settings = getattr(context.scene, "cpc_settings", None) if context.scene else None
-        profile = getattr(settings, "active_profile", None) if settings else None
-        return bool(profile and profile.type == 'CURVE' and profile.get("cpc_recipe_json"))
+        return _reopen_profile_candidate(context, settings) is not None
 
     def execute(self, context):
         settings = _settings(context)
-        profile = settings.active_profile
-        if not profile or not profile.get("cpc_recipe_json"):
-            self.report({'ERROR'}, "Active profile has no CPC construction recipe")
+        profile = _reopen_profile_candidate(context, settings)
+        if not profile:
+            self.report({'ERROR'}, "Selected or active profile has no CPC construction recipe")
             return {'CANCELLED'}
+
+        # Keep the sweep/profile pointer synchronized when editing is initiated
+        # directly from a selected committed profile.
+        if settings.active_profile != profile:
+            settings.active_profile = profile
 
         profile_id = _ensure_profile_id(profile)
         restored, warnings = _restore_recipe_parts(context, profile)
@@ -2186,6 +2215,13 @@ class CPC_OT_ReopenProfile(Operator):
             obj.select_set(False)
         restored[0].select_set(True)
         context.view_layer.objects.active = restored[0]
+
+        # 0.4.2 approval requires draw handlers to remain lazy.  Editing is an
+        # explicit user-triggered CPC action, so this is the correct moment to
+        # create them when Viewport Guides is enabled.
+        if bool(getattr(settings, "viewport_guides", True)):
+            viewport_overlay.ensure_handlers()
+            viewport_overlay.tag_redraw_all(context)
 
         if warnings:
             self.report({'WARNING'}, f"Reopened {len(restored)} parts; {len(warnings)} item(s) could not be fully restored")
@@ -2260,10 +2296,17 @@ class CPC_OT_UseSelectedProfile(Operator):
 class CPC_OT_SaveUserProfile(Operator):
     bl_idname = "cpc.save_user_profile"
     bl_label = "Save User Profile"
-    bl_description = "Save the selected/active complete Curve as a reusable CPC preset with an automatically generated thumbnail"
+    bl_description = "Save the selected/active complete Curve as a reusable CPC preset with category metadata and an automatically generated thumbnail"
     bl_options = {'REGISTER'}
 
     preset_name: StringProperty(name="Preset Name", default="")
+    description: StringProperty(name="Description", default="")
+    category: StringProperty(name="Category", default="")
+    tags: StringProperty(name="Tags", description="Comma-separated search tags", default="")
+    source_collection: StringProperty(name="Source Collection", default="")
+    source_reference: StringProperty(name="Source Reference", default="")
+    source_url: StringProperty(name="Source URL", default="")
+    source_license: StringProperty(name="Source License / Note", default="")
 
     @classmethod
     def poll(cls, context):
@@ -2287,13 +2330,39 @@ class CPC_OT_SaveUserProfile(Operator):
         source = self._source(context)
         if not source:
             return {'CANCELLED'}
+        settings = _settings(context)
         self.preset_name = source.name
-        return context.window_manager.invoke_props_dialog(self, width=420)
+        current = user_profiles.category_filter_value(settings)
+        self.category = current if user_profiles.category_filter_is_real(settings) else ""
+        self.description = ""
+        self.tags = ""
+        self.source_collection = ""
+        self.source_reference = ""
+        self.source_url = ""
+        self.source_license = ""
+        return context.window_manager.invoke_props_dialog(self, width=460)
 
     def draw(self, context):
         source = self._source(context)
         layout = self.layout
         layout.prop(self, "preset_name")
+        layout.prop(self, "description")
+
+        classification = layout.box()
+        classification.label(text="Library Info", icon='ASSET_MANAGER')
+        classification.prop(self, "category")
+        classification.prop(self, "tags")
+        hint = classification.row()
+        hint.enabled = False
+        hint.label(text="Category may be existing or new • Tags are comma-separated")
+
+        source_box = layout.box()
+        source_box.label(text="Source (Optional)", icon='INFO')
+        source_box.prop(self, "source_collection")
+        source_box.prop(self, "source_reference")
+        source_box.prop(self, "source_url")
+        source_box.prop(self, "source_license")
+
         if source:
             preset_type, reason = user_profiles.profile_type_for_save(source)
             box = layout.box()
@@ -2304,7 +2373,7 @@ class CPC_OT_SaveUserProfile(Operator):
             info.label(text=reason)
             note = box.row()
             note.enabled = False
-            note.label(text="Thumbnail is generated automatically")
+            note.label(text="PNG thumbnail is generated automatically")
 
     def execute(self, context):
         source = self._source(context)
@@ -2312,7 +2381,19 @@ class CPC_OT_SaveUserProfile(Operator):
             self.report({'ERROR'}, "No complete Curve profile is available")
             return {'CANCELLED'}
         try:
-            result = user_profiles.save_profile_preset(source, _settings(context), self.preset_name, EXTENSION_VERSION)
+            result = user_profiles.save_profile_preset(
+                source,
+                _settings(context),
+                self.preset_name,
+                EXTENSION_VERSION,
+                description=self.description,
+                category=self.category,
+                tags=self.tags,
+                source_collection=self.source_collection,
+                source_reference=self.source_reference,
+                source_url=self.source_url,
+                source_license=self.source_license,
+            )
         except Exception as exc:
             self.report({'ERROR'}, f"Could not save User Profile: {exc}")
             return {'CANCELLED'}
@@ -2321,6 +2402,145 @@ class CPC_OT_SaveUserProfile(Operator):
             self.report({'WARNING'}, f"Saved {kind} preset; thumbnail failed: {result['thumbnail_error']}")
         else:
             self.report({'INFO'}, f"Saved {kind} preset '{result['name']}' with thumbnail")
+        return {'FINISHED'}
+
+
+class CPC_OT_AddUserProfileCategory(Operator):
+    bl_idname = "cpc.add_user_profile_category"
+    bl_label = "Add User Profile Category"
+    bl_description = "Add a user-managed category to the active CPC profile library"
+    bl_options = {'REGISTER'}
+
+    category_name: StringProperty(name="Category", default="")
+
+    def invoke(self, context, event):
+        self.category_name = ""
+        return context.window_manager.invoke_props_dialog(self, width=360)
+
+    def draw(self, context):
+        self.layout.prop(self, "category_name")
+
+    def execute(self, context):
+        try:
+            category = user_profiles.add_category(_settings(context), self.category_name)
+        except Exception as exc:
+            self.report({'ERROR'}, f"Could not add category: {exc}")
+            return {'CANCELLED'}
+        self.report({'INFO'}, f"Added category '{category}'")
+        return {'FINISHED'}
+
+
+class CPC_OT_RenameUserProfileCategory(Operator):
+    bl_idname = "cpc.rename_user_profile_category"
+    bl_label = "Manage User Profile Category"
+    bl_description = "Rename the selected real category and update matching preset metadata without changing geometry or thumbnails"
+    bl_options = {'REGISTER'}
+
+    old_name: StringProperty(name="Current Category", default="", options={'HIDDEN'})
+    new_name: StringProperty(name="Rename To", default="")
+
+    @classmethod
+    def poll(cls, context):
+        settings = getattr(context.scene, "cpc_settings", None) if context.scene else None
+        return bool(settings and user_profiles.category_filter_is_real(settings))
+
+    def invoke(self, context, event):
+        self.old_name = user_profiles.category_filter_value(_settings(context))
+        self.new_name = self.old_name
+        return context.window_manager.invoke_props_dialog(self, width=400)
+
+    def draw(self, context):
+        layout = self.layout
+        row = layout.row()
+        row.enabled = False
+        row.label(text=f"Category: {self.old_name}")
+        layout.prop(self, "new_name")
+        note = layout.row()
+        note.enabled = False
+        note.label(text="0.4.3 renames categories; merge/delete are intentionally not included")
+
+    def execute(self, context):
+        try:
+            new_name, changed = user_profiles.rename_category(_settings(context), self.old_name, self.new_name)
+        except Exception as exc:
+            self.report({'ERROR'}, f"Could not rename category: {exc}")
+            return {'CANCELLED'}
+        self.report({'INFO'}, f"Renamed category to '{new_name}' ({changed} preset{'s' if changed != 1 else ''} updated)")
+        return {'FINISHED'}
+
+
+class CPC_OT_EditUserProfileInfo(Operator):
+    bl_idname = "cpc.edit_user_profile_info"
+    bl_label = "Edit User Profile Info"
+    bl_description = "Edit display/classification/source metadata without changing preset geometry, recipe, ID or thumbnail"
+    bl_options = {'REGISTER'}
+
+    preset_name: StringProperty(name="Preset Name", default="")
+    description: StringProperty(name="Description", default="")
+    category: StringProperty(name="Category", default="")
+    tags: StringProperty(name="Tags", description="Comma-separated search tags", default="")
+    source_collection: StringProperty(name="Source Collection", default="")
+    source_reference: StringProperty(name="Source Reference", default="")
+    source_url: StringProperty(name="Source URL", default="")
+    source_license: StringProperty(name="Source License / Note", default="")
+
+    @classmethod
+    def poll(cls, context):
+        settings = getattr(context.scene, "cpc_settings", None) if context.scene else None
+        return bool(settings and str(getattr(settings, "user_profile_selected", "") or "") not in {"", "__NONE__"})
+
+    def invoke(self, context, event):
+        metadata = user_profiles.selected_metadata(_settings(context))
+        if not metadata:
+            return {'CANCELLED'}
+        self.preset_name = metadata.get("name", "")
+        self.description = metadata.get("description", "")
+        self.category = metadata.get("category", "")
+        self.tags = ", ".join(metadata.get("tags", []) or [])
+        self.source_collection = metadata.get("source_collection", "")
+        self.source_reference = metadata.get("source_reference", "")
+        self.source_url = metadata.get("source_url", "")
+        self.source_license = metadata.get("source_license", "")
+        return context.window_manager.invoke_props_dialog(self, width=460)
+
+    def draw(self, context):
+        layout = self.layout
+        layout.prop(self, "preset_name")
+        layout.prop(self, "description")
+        classification = layout.box()
+        classification.label(text="Library Info", icon='ASSET_MANAGER')
+        classification.prop(self, "category")
+        classification.prop(self, "tags")
+        source_box = layout.box()
+        source_box.label(text="Source (Optional)", icon='INFO')
+        source_box.prop(self, "source_collection")
+        source_box.prop(self, "source_reference")
+        source_box.prop(self, "source_url")
+        source_box.prop(self, "source_license")
+        note = layout.row()
+        note.enabled = False
+        note.label(text="Geometry, recipe, preset ID and PNG thumbnail are not rewritten")
+
+    def execute(self, context):
+        settings = _settings(context)
+        identifier = settings.user_profile_selected
+        try:
+            result = user_profiles.update_preset_metadata(
+                settings,
+                identifier,
+                name=self.preset_name,
+                description=self.description,
+                category=self.category,
+                tags=self.tags,
+                source_collection=self.source_collection,
+                source_reference=self.source_reference,
+                source_url=self.source_url,
+                source_license=self.source_license,
+            )
+        except Exception as exc:
+            self.report({'ERROR'}, f"Could not edit User Profile info: {exc}")
+            return {'CANCELLED'}
+        self.report({'INFO'}, f"Updated preset info for '{result['name']}'")
         return {'FINISHED'}
 
 
@@ -2598,6 +2818,9 @@ _CLASSES = (
     CPC_OT_ShowParts,
     CPC_OT_UseSelectedProfile,
     CPC_OT_SaveUserProfile,
+    CPC_OT_AddUserProfileCategory,
+    CPC_OT_RenameUserProfileCategory,
+    CPC_OT_EditUserProfileInfo,
     CPC_OT_LoadUserProfile,
     CPC_OT_DeleteUserProfile,
     CPC_OT_RefreshUserProfiles,
