@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "curve_profile_creator"
-version = "0.4.2"
+version = "0.4.3"
 name = "Curve Profile Creator"
 tagline = "Build parametric curve profiles and sweep them along edges"
 maintainer = "M.Kumaran"
@@ -16,7 +16,7 @@ license = [
 
 
 [permissions]
-files = "Save and load CPC profile presets and thumbnails"
+files = "Save CPC profile presets, categories, and thumbnails"
 
 [build]
 paths_exclude_pattern = [

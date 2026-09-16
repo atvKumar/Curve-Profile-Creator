@@ -869,9 +869,23 @@ class CPC_PG_Settings(PropertyGroup):
         update=user_profiles.on_library_path_changed,
     )
 
+    user_profile_category_filter: EnumProperty(
+        name="Category",
+        description="Filter the User Profile library by category; global Search temporarily ignores this filter",
+        items=user_profiles.category_enum_items,
+        update=user_profiles.on_category_filter_changed,
+    )
+
+    user_profile_search: StringProperty(
+        name="Search",
+        description="Search all User Profiles across categories by name, description, tags and source metadata",
+        default="",
+        update=user_profiles.on_search_changed,
+    )
+
     user_profile_selected: EnumProperty(
         name="User Profile",
-        description="Reusable CPC profile preset",
+        description="Reusable CPC profile preset from the current category/global-search result set",
         items=user_profiles.enum_items,
     )
 
