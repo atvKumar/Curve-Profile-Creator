@@ -23,12 +23,13 @@ import bpy
 from bpy.app.handlers import persistent
 from mathutils import Matrix, Vector
 
-from . import junctions, library, profile_transforms
+from . import junctions, library, profile_transforms, viewport_semantics
 
 
 _MATRIX_CACHE: dict[int, Matrix] = {}
 _PROFILE_MATRIX_CACHE: dict[int, Matrix] = {}
 _PROFILE_GESTURES: dict[int, dict] = {}
+_COMPONENT_RESIZE_GESTURES: dict[int, dict] = {}
 _IN_HANDLER = False
 
 _TRANSLATION_EPS = 1.0e-10
@@ -127,11 +128,28 @@ def begin_profile_transform(profile):
     return True
 
 
+def begin_component_resize(obj):
+    """Capture one fixed semantic baseline for a Blender S gesture."""
+    if not _eligible(obj) or not obj.get("cpc_parametric"):
+        return False
+    state = viewport_semantics.capture_uniform_resize_state(obj)
+    if not state:
+        return False
+    key = _object_key(obj)
+    _COMPONENT_RESIZE_GESTURES[key] = {
+        "matrix": obj.matrix_world.copy(),
+        "state": state,
+    }
+    _MATRIX_CACHE[key] = obj.matrix_world.copy()
+    return True
+
+
 def prime_cache():
     """Rebuild session-local external-transform baselines."""
     _MATRIX_CACHE.clear()
     _PROFILE_MATRIX_CACHE.clear()
     _PROFILE_GESTURES.clear()
+    _COMPONENT_RESIZE_GESTURES.clear()
     sync_objects(_component_objects())
     for obj in _profile_objects():
         _sync_profile_object(obj)
@@ -310,6 +328,83 @@ def _profile_rigid_delta(old: Matrix, new: Matrix):
         return None
 
 
+def _uniform_scale_factor(start: Matrix, current: Matrix):
+    """Return a positive uniform local scale factor, or None for non-uniform S."""
+    try:
+        relative = start.inverted_safe() @ current
+        linear = relative.to_3x3()
+        factor = (
+            float(linear[0][0]) + float(linear[1][1]) + float(linear[2][2])
+        ) / 3.0
+        if factor <= 0.0:
+            return None
+        expected = Matrix.Diagonal((factor, factor, factor))
+        error = max(
+            abs(float(linear[row][col]) - float(expected[row][col]))
+            for row in range(3)
+            for col in range(3)
+        )
+        if error > max(1.0e-6, abs(factor) * 1.0e-6):
+            return None
+        return factor
+    except Exception:
+        return None
+
+
+def _route_component_resizes(scene, objects):
+    """Absorb contextual Blender S into CPC construction dimensions."""
+    global _IN_HANDLER
+    if not objects:
+        return set(), False
+
+    consumed = set()
+    changed = False
+    _IN_HANDLER = True
+    try:
+        for obj in objects:
+            key = _object_key(obj)
+            gesture = _COMPONENT_RESIZE_GESTURES.get(key)
+            if not gesture:
+                continue
+            consumed.add(key)
+
+            start_matrix = gesture["matrix"]
+            factor = _uniform_scale_factor(start_matrix, obj.matrix_world.copy())
+
+            if factor is None:
+                obj.matrix_world = start_matrix.copy()
+                obj.update_tag()
+                _MATRIX_CACHE[key] = start_matrix.copy()
+                continue
+
+            # Ignore CPC's own neutral follow-up callback after regeneration.
+            if abs(factor - 1.0) <= 1.0e-10:
+                _MATRIX_CACHE[key] = obj.matrix_world.copy()
+                continue
+
+            obj.matrix_world = start_matrix.copy()
+            obj.update_tag()
+            _MATRIX_CACHE[key] = start_matrix.copy()
+
+            if viewport_semantics.apply_uniform_resize_state(
+                obj,
+                gesture["state"],
+                factor,
+                bpy.context,
+                preserve_anchor=True,
+                propagate_connected=True,
+            ):
+                sync_objects(viewport_semantics.uniform_resize_scope(obj))
+                changed = True
+    except Exception as exc:
+        print(f"[Curve Profile Creator] component resize warning: {exc}")
+        sync_objects(objects)
+    finally:
+        _IN_HANDLER = False
+
+    return consumed, changed
+
+
 def _route_profile_transforms(scene, profiles) -> bool:
     """Absorb Blender G/R into CPC placement semantics and restore object matrices."""
     global _IN_HANDLER
@@ -436,9 +531,12 @@ def _depsgraph_update_post(scene, depsgraph):
         updated_profiles = []
 
     profile_changed = _route_profile_transforms(scene, updated_profiles)
+    resize_consumed, resize_changed = _route_component_resizes(scene, updated_objects)
+    if resize_consumed:
+        updated_objects = [obj for obj in updated_objects if _object_key(obj) not in resize_consumed]
 
     if not updated_objects:
-        if profile_changed:
+        if profile_changed or resize_changed:
             _tag_redraw()
         return
 
@@ -530,7 +628,7 @@ def _depsgraph_update_post(scene, depsgraph):
     finally:
         _IN_HANDLER = False
 
-    if moved_any:
+    if moved_any or profile_changed or resize_changed:
         _tag_redraw()
 
 
@@ -552,6 +650,7 @@ def register():
     _MATRIX_CACHE.clear()
     _PROFILE_MATRIX_CACHE.clear()
     _PROFILE_GESTURES.clear()
+    _COMPONENT_RESIZE_GESTURES.clear()
 
 
 def unregister():
@@ -562,3 +661,4 @@ def unregister():
     _MATRIX_CACHE.clear()
     _PROFILE_MATRIX_CACHE.clear()
     _PROFILE_GESTURES.clear()
+    _COMPONENT_RESIZE_GESTURES.clear()
