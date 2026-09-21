@@ -7,10 +7,9 @@ from mathutils import Vector
 def set_curve_fill_both(curve):
     """Set full/two-sided curve fill across Blender API versions.
 
-    Blender 5.x accepts ``BOTH`` while Blender 4.x used ``FULL``.  Do not use
-    RNA enum introspection here: Blender 5.2 can expose legacy enum metadata
-    even though the runtime setter only accepts the new identifiers.  The
-    setter itself is therefore the compatibility test.
+    Blender exposes dimension-dependent identifiers for this property. 2D
+    curves use BOTH/NONE while the legacy/static enum metadata can still expose
+    FULL/HALF. The runtime setter is therefore the compatibility test.
     """
     try:
         curve.fill_mode = 'BOTH'
@@ -22,10 +21,35 @@ def set_curve_fill_both(curve):
         curve.fill_mode = 'FULL'
         return 'FULL'
     except (TypeError, ValueError):
-        # A future Blender version may rename the enum again.  Fill mode is not
-        # essential to constructing the profile/path datablock, so preserve
-        # Blender's default instead of aborting the modelling operation.
         return curve.fill_mode
+
+
+def set_sweep_caps(curve, enabled):
+    """Apply CPC sweep-cap semantics to one Curve datablock.
+
+    For 2D paths CPC owns both Blender's bevel-cap toggle and the front/back
+    fill mode. Caps OFF means no 2D fill; Caps ON means both sides. 3D paths do
+    not expose the same NONE/BOTH fill choices, so only use_fill_caps is
+    changed there.
+    """
+    if curve is None:
+        return None
+
+    enabled = bool(enabled)
+    curve.use_fill_caps = enabled
+
+    if str(getattr(curve, "dimensions", "") or "") != '2D':
+        return getattr(curve, "fill_mode", None)
+
+    target = 'BOTH' if enabled else 'NONE'
+    try:
+        curve.fill_mode = target
+        return target
+    except (TypeError, ValueError):
+        # Some Blender builds expose legacy/static enum identifiers even though
+        # the 2D runtime UI uses None/Both. Preserve the existing mode rather
+        # than guessing a semantically different 3D identifier.
+        return getattr(curve, "fill_mode", None)
 
 
 def remove_cpc_smooth_by_angle(obj):
@@ -723,8 +747,6 @@ def create_sweep_path(
     curve.render_resolution_u = max(resolution, 8)
     curve.bevel_mode = 'OBJECT'
     curve.bevel_object = profile_obj
-    set_curve_fill_both(curve)
-    curve.use_fill_caps = fill_caps
 
     detected_z = _horizontal_planar_z(world_paths, planar_tolerance)
     use_2d = path_mode == '2D' or (path_mode == 'AUTO' and detected_z is not None)
@@ -741,6 +763,8 @@ def create_sweep_path(
         plane_z = 0.0
         curve.dimensions = '3D'
         curve.twist_mode = twist_mode
+
+    set_sweep_caps(curve, fill_caps)
 
     for source_coords in world_paths:
         coords = list(source_coords)
