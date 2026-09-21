@@ -2060,6 +2060,7 @@ class CPC_OT_CommitProfile(Operator):
         editing_profile_id = str(getattr(settings, "editing_profile_id", "") or "").strip()
         updating_existing = bool(editing_profile_id)
         profile = None
+        preserved_placement = profile_transforms.neutral_profile_placement()
 
         if updating_existing:
             candidate = settings.active_profile
@@ -2070,6 +2071,7 @@ class CPC_OT_CommitProfile(Operator):
             if profile is None:
                 self.report({'ERROR'}, "The profile being edited no longer exists")
                 return {'CANCELLED'}
+            preserved_placement = profile_transforms.profile_placement_state(profile)
 
             # Generate replacement data through the proven profile builder, then
             # swap it onto the existing profile object. Existing sweeps continue
@@ -2120,8 +2122,15 @@ class CPC_OT_CommitProfile(Operator):
         profile["cpc_recipe_json"] = json.dumps(recipe_records, sort_keys=True)
         settings.editing_profile_id = ""
         settings.build_session_id = ""
-        settings.active_profile = profile
+
+        # New/rebuilt curve data is canonical geometry.  Rebase it neutrally,
+        # then reapply the complete-profile placement state in one pass so
+        # Recommit never bakes interaction order into the recipe.
         properties.bake_live_profile_adjustment(settings, profile)
+        settings.active_profile = profile
+        properties.set_profile_placement_state(
+            settings, context, profile, state=preserved_placement
+        )
         profile["cpc_recipe_geometry_hash"] = user_profiles.curve_authority_hash(profile)
 
         if settings.hide_builder_parts:
@@ -2721,10 +2730,11 @@ class CPC_OT_FlipActiveProfileX(Operator):
         if not profile or profile.type != 'CURVE':
             self.report({'ERROR'}, "Choose an active profile first")
             return {'CANCELLED'}
-        properties.bake_live_profile_adjustment(_settings(context), profile)
-        profile.data.transform(Matrix.Diagonal((-1.0, 1.0, 1.0, 1.0)))
-        properties.capture_profile_adjust_baseline(profile)
-        _refresh_profile_dependents(context, profile)
+        settings = _settings(context)
+        state = profile_transforms.profile_placement_state(profile)
+        properties.set_profile_placement_state(
+            settings, context, profile, flip_x=not state["flip_x"]
+        )
         return {'FINISHED'}
 
 
@@ -2739,10 +2749,11 @@ class CPC_OT_FlipActiveProfileY(Operator):
         if not profile or profile.type != 'CURVE':
             self.report({'ERROR'}, "Choose an active profile first")
             return {'CANCELLED'}
-        properties.bake_live_profile_adjustment(_settings(context), profile)
-        profile.data.transform(Matrix.Diagonal((1.0, -1.0, 1.0, 1.0)))
-        properties.capture_profile_adjust_baseline(profile)
-        _refresh_profile_dependents(context, profile)
+        settings = _settings(context)
+        state = profile_transforms.profile_placement_state(profile)
+        properties.set_profile_placement_state(
+            settings, context, profile, flip_y=not state["flip_y"]
+        )
         return {'FINISHED'}
 
 
@@ -2757,10 +2768,14 @@ class CPC_OT_RotateActiveProfile90(Operator):
         if not profile or profile.type != 'CURVE':
             self.report({'ERROR'}, "Choose an active profile first")
             return {'CANCELLED'}
-        properties.bake_live_profile_adjustment(_settings(context), profile)
-        profile.data.transform(Matrix.Rotation(math.radians(90.0), 4, 'Z'))
-        properties.capture_profile_adjust_baseline(profile)
-        _refresh_profile_dependents(context, profile)
+        settings = _settings(context)
+        state = profile_transforms.profile_placement_state(profile)
+        properties.set_profile_placement_state(
+            settings,
+            context,
+            profile,
+            rotation=state["rotation"] + math.radians(90.0),
+        )
         return {'FINISHED'}
 
 

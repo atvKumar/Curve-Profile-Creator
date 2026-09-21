@@ -548,13 +548,7 @@ class CPC_PT_Main(Panel):
 
         adjust = box.box()
         adjust.label(text="Profile Transform", icon='ORIENTATION_LOCAL')
-        adjust.prop(settings, "profile_adjust_uniform_scale", text="Uniform Scale")
-        if settings.profile_adjust_uniform_scale:
-            adjust.prop(settings, "profile_adjust_scale_x", text="Scale")
-        else:
-            row = adjust.row(align=True)
-            row.prop(settings, "profile_adjust_scale_x", text="Scale X")
-            row.prop(settings, "profile_adjust_scale_y", text="Scale Y")
+        adjust.prop(settings, "profile_adjust_scale_x", text="Uniform Scale")
         adjust.prop(settings, "profile_adjust_rotation", text="Rotation")
 
         obj = context.object

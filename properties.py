@@ -1,7 +1,7 @@
 import json
 import math
 import bpy
-from mathutils import Matrix
+from mathutils import Matrix, Vector
 from bpy.app.handlers import persistent
 from bpy.props import (
     BoolProperty,
@@ -15,7 +15,7 @@ from bpy.types import PropertyGroup
 
 from .architectural_recipes import ARCHITECTURAL_COMPONENT_ITEMS
 from .constructed_shapes import CONSTRUCTED_SHAPE_ITEMS
-from . import compound_geometry, primitive_geometry, user_profiles
+from . import compound_geometry, primitive_geometry, profile_transforms, user_profiles
 
 
 def _profile_poll(_self, obj):
@@ -93,9 +93,10 @@ def _get_object_arch_secondary_arc_radius(self):
     )
 
 
-# Session-local baseline cache for committed-profile live adjustment.  The
-# visible curve data is always regenerated from this baseline, so dragging
-# scale/rotation controls is absolute and does not accumulate numerical drift.
+# Session-local neutral geometry cache for complete-profile placement.
+# Visible curve data is always rebuilt from this neutral baseline using the one
+# canonical 0.4.4 placement matrix.  The placement state itself is persisted on
+# the profile object so a saved .blend can reconstruct the neutral baseline.
 _PROFILE_ADJUST_BASELINES = {}
 
 
@@ -156,10 +157,45 @@ def _restore_curve_geometry(curve, snapshot):
     return True
 
 
+def _transform_curve_snapshot(snapshot, matrix):
+    """Return a transformed copy of a lightweight CPC curve snapshot."""
+    result = []
+    for item in snapshot:
+        target = {
+            "type": item.get("type"),
+            "cyclic": bool(item.get("cyclic", False)),
+            "points": [],
+        }
+        if item.get("type") == 'BEZIER':
+            for co, left, right in item.get("points", ()):
+                target["points"].append((
+                    tuple(matrix @ Vector(co[:3])),
+                    tuple(matrix @ Vector(left[:3])),
+                    tuple(matrix @ Vector(right[:3])),
+                ))
+        else:
+            for co in item.get("points", ()):
+                transformed = matrix @ Vector(co[:3])
+                if len(co) >= 4:
+                    target["points"].append((transformed.x, transformed.y, transformed.z, co[3]))
+                else:
+                    target["points"].append(tuple(transformed))
+        result.append(target)
+    return result
+
+
 def capture_profile_adjust_baseline(profile):
+    """Recover and cache neutral geometry from the profile's visible placement."""
     if not profile or profile.type != 'CURVE':
         return
-    _PROFILE_ADJUST_BASELINES[_profile_key(profile)] = _snapshot_curve_geometry(profile.data)
+    visible = _snapshot_curve_geometry(profile.data)
+    state = profile_transforms.profile_placement_state(profile)
+    try:
+        inverse = profile_transforms.build_profile_placement_matrix(state).inverted()
+        neutral = _transform_curve_snapshot(visible, inverse)
+    except Exception:
+        neutral = visible
+    _PROFILE_ADJUST_BASELINES[_profile_key(profile)] = neutral
 
 
 def _refresh_profile_dependents(context, profile):
@@ -197,14 +233,67 @@ def _adjust_guarded(settings):
     return bool(scene and scene.get("_cpc_profile_adjust_guard", False))
 
 
-def _reset_adjustment_controls(settings):
+def _sync_adjustment_controls(settings, profile=None):
+    profile = profile or getattr(settings, "active_profile", None)
+    state = profile_transforms.profile_placement_state(profile)
     _set_adjust_guard(settings, True)
     try:
-        settings.profile_adjust_scale_x = 1.0
-        settings.profile_adjust_scale_y = 1.0
-        settings.profile_adjust_rotation = 0.0
+        if hasattr(settings, "profile_adjust_offset_x"):
+            settings.profile_adjust_offset_x = state["offset_x"]
+        if hasattr(settings, "profile_adjust_offset_y"):
+            settings.profile_adjust_offset_y = state["offset_y"]
+        settings.profile_adjust_uniform_scale = True
+        settings.profile_adjust_scale_x = state["uniform_scale"]
+        settings.profile_adjust_scale_y = state["uniform_scale"]
+        settings.profile_adjust_rotation = state["rotation"]
     finally:
         _set_adjust_guard(settings, False)
+
+
+def _profile_recipe_was_authoritative(profile):
+    if not profile or not str(profile.get("cpc_recipe_json", "") or "").strip():
+        return False
+    stored = str(profile.get("cpc_recipe_geometry_hash", "") or "").strip()
+    if not stored:
+        return False
+    try:
+        return stored == user_profiles.curve_authority_hash(profile)
+    except Exception:
+        return False
+
+
+def set_profile_placement_state(settings, context, profile=None, state=None, **changes):
+    """Persist and apply one canonical complete-profile placement state."""
+    profile = profile or getattr(settings, "active_profile", None)
+    if not profile or profile.type != 'CURVE':
+        return profile_transforms.neutral_profile_placement()
+
+    current = profile_transforms.profile_placement_state(profile)
+    target = dict(current if state is None else state)
+    target.update(changes)
+    target = profile_transforms.normalize_profile_placement(target)
+
+    key = _profile_key(profile)
+    baseline = _PROFILE_ADJUST_BASELINES.get(key)
+    if not _snapshot_matches_curve(baseline, profile.data):
+        capture_profile_adjust_baseline(profile)
+        baseline = _PROFILE_ADJUST_BASELINES.get(key)
+    if not _restore_curve_geometry(profile.data, baseline):
+        return current
+
+    preserve_authority = _profile_recipe_was_authoritative(profile)
+    profile_transforms.set_profile_placement_state(profile, target)
+    profile.data.transform(profile_transforms.build_profile_placement_matrix(target))
+
+    if preserve_authority:
+        try:
+            profile["cpc_recipe_geometry_hash"] = user_profiles.curve_authority_hash(profile)
+        except Exception:
+            pass
+
+    _sync_adjustment_controls(settings, profile)
+    _refresh_profile_dependents(context, profile)
+    return target
 
 
 def _apply_live_profile_adjustment(settings, context, source=None):
@@ -214,31 +303,19 @@ def _apply_live_profile_adjustment(settings, context, source=None):
     if not profile or profile.type != 'CURVE':
         return
 
-    # Uniform scale follows whichever scale field the user is actively editing.
-    if settings.profile_adjust_uniform_scale and source in {'X', 'Y'}:
-        _set_adjust_guard(settings, True)
-        try:
-            if source == 'X':
-                settings.profile_adjust_scale_y = settings.profile_adjust_scale_x
-            else:
-                settings.profile_adjust_scale_x = settings.profile_adjust_scale_y
-        finally:
-            _set_adjust_guard(settings, False)
+    changes = {}
+    if source in {'X', 'Y'}:
+        value = settings.profile_adjust_scale_x if source == 'X' else settings.profile_adjust_scale_y
+        changes["uniform_scale"] = max(0.001, float(value))
+    elif source == 'ROT':
+        changes["rotation"] = float(settings.profile_adjust_rotation)
+    elif source == 'OFFSET_X':
+        changes["offset_x"] = float(settings.profile_adjust_offset_x)
+    elif source == 'OFFSET_Y':
+        changes["offset_y"] = float(settings.profile_adjust_offset_y)
 
-    key = _profile_key(profile)
-    baseline = _PROFILE_ADJUST_BASELINES.get(key)
-    if not _snapshot_matches_curve(baseline, profile.data):
-        capture_profile_adjust_baseline(profile)
-        baseline = _PROFILE_ADJUST_BASELINES.get(key)
-    if not _restore_curve_geometry(profile.data, baseline):
-        return
-
-    sx = max(0.001, float(settings.profile_adjust_scale_x))
-    sy = max(0.001, float(settings.profile_adjust_scale_y))
-    angle = float(settings.profile_adjust_rotation)
-    matrix = Matrix.Rotation(angle, 4, 'Z') @ Matrix.Diagonal((sx, sy, 1.0, 1.0))
-    profile.data.transform(matrix)
-    _refresh_profile_dependents(context, profile)
+    if changes:
+        set_profile_placement_state(settings, context, profile, **changes)
 
 
 def _update_profile_scale_x(self, context):
@@ -253,11 +330,23 @@ def _update_profile_rotation(self, context):
     _apply_live_profile_adjustment(self, context, source='ROT')
 
 
+def _update_profile_offset_x(self, context):
+    _apply_live_profile_adjustment(self, context, source='OFFSET_X')
+
+
+def _update_profile_offset_y(self, context):
+    _apply_live_profile_adjustment(self, context, source='OFFSET_Y')
+
+
 def _update_uniform_scale(self, context):
-    if _adjust_guarded(self) or not self.profile_adjust_uniform_scale:
+    if _adjust_guarded(self):
         return
+    # 0.4.4 complete profiles have one semantic Uniform Scale.  Keep the
+    # legacy toggle/property available for .blend compatibility, but do not
+    # permit it to create a second non-uniform placement model.
     _set_adjust_guard(self, True)
     try:
+        self.profile_adjust_uniform_scale = True
         self.profile_adjust_scale_y = self.profile_adjust_scale_x
     finally:
         _set_adjust_guard(self, False)
@@ -296,17 +385,20 @@ def _update_smooth_enabled(self, context):
 def _active_profile_changed(self, context):
     if _adjust_guarded(self):
         return
-    _reset_adjustment_controls(self)
     capture_profile_adjust_baseline(self.active_profile)
+    _sync_adjustment_controls(self, self.active_profile)
 
 
 def bake_live_profile_adjustment(settings, profile=None):
-    """Make the currently visible profile the new neutral live-adjust baseline."""
+    """Bake the visible complete-profile result as a new neutral placement."""
     profile = profile or settings.active_profile
     if not profile or profile.type != 'CURVE':
         return
-    capture_profile_adjust_baseline(profile)
-    _reset_adjustment_controls(settings)
+    _PROFILE_ADJUST_BASELINES[_profile_key(profile)] = _snapshot_curve_geometry(profile.data)
+    profile_transforms.set_profile_placement_state(
+        profile, profile_transforms.neutral_profile_placement()
+    )
+    _sync_adjustment_controls(settings, profile)
 
 
 def _cyma_orientation(primitive_id):
@@ -438,8 +530,8 @@ def _initialise_loaded_cpc_state(_dummy=None):
         for scene in bpy.data.scenes:
             if not hasattr(scene, "cpc_settings"):
                 continue
-            _reset_adjustment_controls(scene.cpc_settings)
             capture_profile_adjust_baseline(scene.cpc_settings.active_profile)
+            _sync_adjustment_controls(scene.cpc_settings, scene.cpc_settings.active_profile)
     except Exception as exc:
         print(f"[Curve Profile Creator] load-state warning: {exc}")
 
@@ -908,16 +1000,32 @@ class CPC_PG_Settings(PropertyGroup):
         default='AUTO',
     )
 
+    profile_adjust_offset_x: FloatProperty(
+        name="Offset X",
+        description="Canonical complete-profile local X placement offset",
+        default=0.0,
+        unit='LENGTH',
+        update=_update_profile_offset_x,
+    )
+
+    profile_adjust_offset_y: FloatProperty(
+        name="Offset Y",
+        description="Canonical complete-profile local Y placement offset",
+        default=0.0,
+        unit='LENGTH',
+        update=_update_profile_offset_y,
+    )
+
     profile_adjust_uniform_scale: BoolProperty(
         name="Uniform Scale",
-        description="Link X and Y while live-scaling the committed profile",
+        description="Compatibility toggle; 0.4.4 complete-profile placement always uses one Uniform Scale",
         default=True,
         update=_update_uniform_scale,
     )
 
     profile_adjust_scale_x: FloatProperty(
         name="Scale X",
-        description="Live committed-profile X scale around its local anchor/origin",
+        description="Canonical Uniform Scale of the complete committed profile",
         default=1.0,
         min=0.001,
         soft_max=10.0,
@@ -927,7 +1035,7 @@ class CPC_PG_Settings(PropertyGroup):
 
     profile_adjust_scale_y: FloatProperty(
         name="Scale Y",
-        description="Live committed-profile Y scale around its local anchor/origin",
+        description="Compatibility mirror of the complete profile Uniform Scale",
         default=1.0,
         min=0.001,
         soft_max=10.0,

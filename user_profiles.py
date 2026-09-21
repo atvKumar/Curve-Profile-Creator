@@ -541,6 +541,8 @@ def save_profile_preset(
         "geometry": geometry_data,
         "preview": {"file": os.path.basename(preview_path)},
     }
+    if profile_transforms.has_profile_placement_state(obj):
+        document["placement"] = profile_transforms.profile_placement_state(obj)
     source = {
         "collection": str(source_collection or "").strip(),
         "reference": str(source_reference or "").strip(),
@@ -669,6 +671,10 @@ def load_profile_preset(context, settings, identifier: str):
     obj["cpc_user_preset_id"] = str(document.get("id", "") or "")
     obj["cpc_user_preset_type"] = str(document.get("profile_type", profile_presets.PROFILE_TYPE_STATIC))
     obj["cpc_anchor_world"] = (0.0, 0.0, 0.0)
+
+    placement = document.get("placement")
+    if isinstance(placement, dict):
+        profile_transforms.set_profile_placement_state(obj, placement)
 
     if document["profile_type"] == profile_presets.PROFILE_TYPE_PARAMETRIC:
         recipe = document["recipe"]
