@@ -234,7 +234,10 @@ def _adjust_guarded(settings):
 
 
 def _sync_adjustment_controls(settings, profile=None):
-    profile = profile or getattr(settings, "active_profile", None)
+    active = getattr(settings, "active_profile", None)
+    profile = profile or active
+    if profile is not None and active is not None and profile != active:
+        return
     state = profile_transforms.profile_placement_state(profile)
     _set_adjust_guard(settings, True)
     try:
