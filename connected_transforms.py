@@ -28,6 +28,7 @@ from . import junctions, library, profile_transforms
 
 _MATRIX_CACHE: dict[int, Matrix] = {}
 _PROFILE_MATRIX_CACHE: dict[int, Matrix] = {}
+_PROFILE_GESTURES: dict[int, dict] = {}
 _IN_HANDLER = False
 
 _TRANSLATION_EPS = 1.0e-10
@@ -111,10 +112,26 @@ def _sync_profile_object(obj):
         pass
 
 
+def begin_profile_transform(profile):
+    """Capture one absolute Blender G/R gesture baseline."""
+    if not _profile_eligible(profile):
+        return False
+    key = _object_key(profile)
+    try:
+        matrix = profile.matrix_world.copy()
+        state = profile_transforms.profile_placement_state(profile)
+    except Exception:
+        return False
+    _PROFILE_GESTURES[key] = {"matrix": matrix, "state": dict(state)}
+    _PROFILE_MATRIX_CACHE[key] = matrix.copy()
+    return True
+
+
 def prime_cache():
     """Rebuild session-local external-transform baselines."""
     _MATRIX_CACHE.clear()
     _PROFILE_MATRIX_CACHE.clear()
+    _PROFILE_GESTURES.clear()
     sync_objects(_component_objects())
     for obj in _profile_objects():
         _sync_profile_object(obj)
@@ -311,48 +328,44 @@ def _route_profile_transforms(scene, profiles) -> bool:
 
         for profile in profiles:
             key = _object_key(profile)
-            old = _PROFILE_MATRIX_CACHE.get(key)
-            if old is None:
-                _PROFILE_MATRIX_CACHE[key] = profile.matrix_world.copy()
+            new = profile.matrix_world.copy()
+            gesture = _PROFILE_GESTURES.get(key)
+
+            # Only an explicitly captured G/R gesture is absorbed. Every modal
+            # depsgraph update is resolved against the same fixed start state,
+            # so mouse movement cannot accumulate repeatedly.
+            if not gesture:
+                _PROFILE_MATRIX_CACHE[key] = new
                 continue
 
-            new = profile.matrix_world.copy()
-            delta = _profile_rigid_delta(old, new)
+            start_matrix = gesture["matrix"]
+            start_state = gesture["state"]
+            delta = _profile_rigid_delta(start_matrix, new)
             if delta is None:
-                # Unsupported raw scale/shear is left alone for the dedicated
-                # resize work rather than being guessed at here.
-                _PROFILE_MATRIX_CACHE[key] = new
+                profile.matrix_world = start_matrix.copy()
+                profile.update_tag()
+                _PROFILE_MATRIX_CACHE[key] = start_matrix.copy()
                 continue
 
             translation, rotation_delta = delta
             moved = translation.length_squared > (_TRANSLATION_EPS * _TRANSLATION_EPS)
             rotated = abs(rotation_delta) > 1.0e-10
-            if not moved and not rotated:
-                _PROFILE_MATRIX_CACHE[key] = new
-                continue
 
-            # Restore Blender's object transform before checking recipe authority
-            # or rebuilding visible geometry. CPC state remains the only
-            # persistent complete-profile placement representation.
-            profile.matrix_world = old.copy()
+            # Keep Blender object transforms neutral. The complete-profile
+            # placement lives only in CPC semantic state.
+            profile.matrix_world = start_matrix.copy()
             profile.update_tag()
-            _PROFILE_MATRIX_CACHE[key] = old.copy()
-
-            state = profile_transforms.profile_placement_state(profile)
-            changes = {}
-            if moved:
-                changes["offset_x"] = state["offset_x"] + float(translation.x)
-                changes["offset_y"] = state["offset_y"] + float(translation.y)
-            if rotated:
-                changes["rotation"] = state["rotation"] + rotation_delta
+            _PROFILE_MATRIX_CACHE[key] = start_matrix.copy()
 
             properties.set_profile_placement_state(
                 settings,
                 bpy.context,
                 profile,
-                **changes,
+                offset_x=start_state["offset_x"] + (float(translation.x) if moved else 0.0),
+                offset_y=start_state["offset_y"] + (float(translation.y) if moved else 0.0),
+                rotation=start_state["rotation"] + (rotation_delta if rotated else 0.0),
             )
-            changed = True
+            changed = changed or moved or rotated
     except Exception as exc:
         print(f"[Curve Profile Creator] profile transform routing warning: {exc}")
         for profile in profiles:
@@ -529,6 +542,7 @@ def register():
     # load_post primes the cache once ordinary file data is available.
     _MATRIX_CACHE.clear()
     _PROFILE_MATRIX_CACHE.clear()
+    _PROFILE_GESTURES.clear()
 
 
 def unregister():
@@ -538,3 +552,4 @@ def unregister():
         bpy.app.handlers.load_post.remove(_load_post)
     _MATRIX_CACHE.clear()
     _PROFILE_MATRIX_CACHE.clear()
+    _PROFILE_GESTURES.clear()
