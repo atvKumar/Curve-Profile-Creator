@@ -11,8 +11,9 @@ are updated and the profile is rebuilt through the canonical CPC placement
 matrix. This prevents Blender object transforms from becoming a second source
 of complete-profile placement state.
 
-Component scale/resize remains outside this module and is handled by the later
-semantic-resize work.
+Direct component and committed-profile resize modals remain outside this
+module. They explicitly end any stale native G/R gesture before changing CPC
+semantic size state.
 """
 
 from __future__ import annotations
@@ -125,6 +126,14 @@ def begin_profile_transform(profile):
     _PROFILE_GESTURES[key] = {"matrix": matrix, "state": dict(state)}
     _PROFILE_MATRIX_CACHE[key] = matrix.copy()
     return True
+
+
+def end_profile_transform(profile):
+    """Discard a completed native G/R gesture and sync the profile matrix."""
+    if profile is None:
+        return
+    _PROFILE_GESTURES.pop(_object_key(profile), None)
+    _sync_profile_object(profile)
 
 
 def prime_cache():

@@ -3036,6 +3036,206 @@ def _selected_committed_profile(context):
     return None
 
 
+class CPC_OT_ProfileResize(Operator):
+    bl_idname = "cpc.profile_resize"
+    bl_label = "Resize CPC Profile"
+    bl_description = "Use Blender S as the committed profile's semantic CPC Uniform Scale"
+    bl_options = {'REGISTER', 'UNDO', 'BLOCKING'}
+
+    _target = None
+    _settings_ref = None
+    _start_state = None
+    _original_state = None
+    _original_scale = None
+    _pivot_region = None
+    _start_distance = 1.0
+    _start_mouse_x = 0.0
+    _numeric = ""
+    _factor = 1.0
+    _did_apply = False
+
+    @classmethod
+    def poll(cls, context):
+        return bool(
+            context.mode == 'OBJECT'
+            and context.area
+            and context.area.type == 'VIEW_3D'
+            and _selected_committed_profile(context)
+        )
+
+    def _set_status(self, context):
+        total = float(self._start_state["uniform_scale"]) * float(self._factor)
+        context.workspace.status_text_set(
+            f"CPC Profile Size {self._factor:.4f}× | Uniform Scale {total:.4f} | "
+            "Mouse scale • Type factor • Shift fine • Enter/LMB accept • Esc/RMB cancel"
+        )
+
+    def _apply_factor(self, context, factor):
+        try:
+            target_state = profile_transforms.apply_profile_resize_factor(
+                self._start_state,
+                max(float(factor), 0.001),
+            )
+        except profile_transforms.ProfileTransformError as exc:
+            self.report({'ERROR'}, str(exc))
+            return False
+
+        # CPC owns complete-profile placement. Any positive uniform Object
+        # Scale captured at invoke is migrated into the semantic Uniform Scale
+        # and Offset X/Y baseline exactly once, preserving the visible result.
+        connected_transforms.end_profile_transform(self._target)
+        self._target.scale = (1.0, 1.0, 1.0)
+        properties.set_profile_placement_state(
+            self._settings_ref,
+            context,
+            self._target,
+            state=target_state,
+        )
+        connected_transforms.end_profile_transform(self._target)
+        self._factor = max(float(factor), 0.001)
+        self._did_apply = True
+        self._set_status(context)
+        if context.area:
+            context.area.tag_redraw()
+        return True
+
+    def _restore_original(self, context):
+        if not self._target:
+            return
+        connected_transforms.end_profile_transform(self._target)
+        self._target.scale = (1.0, 1.0, 1.0)
+        properties.set_profile_placement_state(
+            self._settings_ref,
+            context,
+            self._target,
+            state=self._original_state,
+        )
+        self._target.scale = self._original_scale
+        self._target.update_tag()
+        connected_transforms.end_profile_transform(self._target)
+        try:
+            context.view_layer.update()
+        except Exception:
+            pass
+
+    def invoke(self, context, event):
+        profile = _selected_committed_profile(context)
+        if not profile:
+            return {'CANCELLED'}
+
+        settings = _settings(context)
+        original_state = profile_transforms.profile_placement_state(profile)
+        original_scale = tuple(float(value) for value in profile.scale)
+        try:
+            start_state = profile_transforms.capture_profile_resize_state(
+                original_state,
+                original_scale,
+            )
+        except profile_transforms.ProfileTransformError as exc:
+            self.report({'ERROR'}, f"Cannot use CPC Uniform Scale: {exc}")
+            return {'CANCELLED'}
+
+        connected_transforms.end_profile_transform(profile)
+        if settings.active_profile != profile:
+            settings.active_profile = profile
+        # The placement cache is session-local and topology-only validation
+        # cannot detect direct point edits. Capture the current visible profile
+        # unconditionally so both preview and cancellation use this gesture's
+        # exact starting geometry.
+        properties.capture_profile_adjust_baseline(profile)
+
+        self._target = profile
+        self._settings_ref = settings
+        self._start_state = start_state
+        self._original_state = original_state
+        self._original_scale = original_scale
+        self._numeric = ""
+        self._factor = 1.0
+        self._did_apply = False
+        self._start_mouse_x = float(event.mouse_region_x)
+
+        pivot = view3d_utils.location_3d_to_region_2d(
+            context.region,
+            context.space_data.region_3d,
+            profile.matrix_world.translation,
+            default=None,
+        )
+        self._pivot_region = pivot.copy() if pivot is not None else None
+        if self._pivot_region is not None:
+            mouse = Vector((event.mouse_region_x, event.mouse_region_y))
+            self._start_distance = max((mouse - self._pivot_region).length, 8.0)
+        else:
+            self._start_distance = 1.0
+
+        self._set_status(context)
+        context.window_manager.modal_handler_add(self)
+        return {'RUNNING_MODAL'}
+
+    def modal(self, context, event):
+        if event.type == 'MOUSEMOVE' and not self._numeric:
+            if self._pivot_region is not None:
+                mouse = Vector((event.mouse_region_x, event.mouse_region_y))
+                raw = max((mouse - self._pivot_region).length / self._start_distance, 0.001)
+            else:
+                raw = max(math.exp((float(event.mouse_region_x) - self._start_mouse_x) * 0.005), 0.001)
+            factor = 1.0 + (raw - 1.0) * (0.1 if event.shift else 1.0)
+            self._apply_factor(context, factor)
+            return {'RUNNING_MODAL'}
+
+        if event.value == 'PRESS':
+            if event.type in {'ESC', 'RIGHTMOUSE'}:
+                if self._did_apply:
+                    self._restore_original(context)
+                context.workspace.status_text_set(None)
+                return {'CANCELLED'}
+
+            if event.type in {'LEFTMOUSE', 'RET', 'NUMPAD_ENTER'}:
+                try:
+                    value = profile_transforms.accepted_profile_resize_factor(
+                        self._numeric,
+                        self._factor,
+                    )
+                except profile_transforms.ProfileTransformError as exc:
+                    self.report({'WARNING'}, str(exc))
+                    return {'RUNNING_MODAL'}
+                if not self._apply_factor(context, value):
+                    return {'RUNNING_MODAL'}
+                context.workspace.status_text_set(None)
+                return {'FINISHED'}
+
+            if event.type == 'BACK_SPACE':
+                self._numeric = self._numeric[:-1]
+                if self._numeric:
+                    try:
+                        value = float(self._numeric)
+                    except ValueError:
+                        value = None
+                    if value is not None and value > 0.0:
+                        self._apply_factor(context, value)
+                else:
+                    self._apply_factor(context, 1.0)
+                return {'RUNNING_MODAL'}
+
+            char = CPC_OT_PlacePart._numeric_char(event)
+            if char:
+                if char == '-' and self._numeric:
+                    return {'RUNNING_MODAL'}
+                if char == '.' and '.' in self._numeric:
+                    return {'RUNNING_MODAL'}
+                self._numeric += char
+                value = None
+                if self._numeric not in {'-', '.', '-.'}:
+                    try:
+                        value = float(self._numeric)
+                    except ValueError:
+                        pass
+                if value is not None and value > 0.0:
+                    self._apply_factor(context, value)
+                return {'RUNNING_MODAL'}
+
+        return {'RUNNING_MODAL'}
+
+
 class CPC_OT_ProfileTranslate(Operator):
     bl_idname = "cpc.profile_translate"
     bl_label = "Move CPC Profile"
@@ -3216,6 +3416,7 @@ _CLASSES = (
     CPC_OT_ApplyProfileToCurve,
     CPC_OT_ComponentResize,
     CPC_OT_ComponentRotate,
+    CPC_OT_ProfileResize,
     CPC_OT_ProfileTranslate,
     CPC_OT_ProfileRotate,
     CPC_OT_FlipActiveProfileX,
@@ -3239,14 +3440,16 @@ def register():
         _KEYMAPS.append((km, kmi))
 
         # G/R remain ordinary Blender transforms for every other object. On a
-        # committed CPC profile these contextual wrappers only capture the
-        # gesture baseline, then hand control straight to Blender's own
-        # transform operators.
+        # committed CPC profile these contextual wrappers capture a fixed
+        # gesture baseline before handing control to Blender. S is owned by a
+        # CPC modal so Object Scale never becomes a second size authority.
         kmi = km.keymap_items.new("cpc.profile_translate", 'G', 'PRESS')
         _KEYMAPS.append((km, kmi))
         kmi = km.keymap_items.new("cpc.profile_rotate", 'R', 'PRESS')
         _KEYMAPS.append((km, kmi))
         kmi = km.keymap_items.new("cpc.component_rotate", 'R', 'PRESS')
+        _KEYMAPS.append((km, kmi))
+        kmi = km.keymap_items.new("cpc.profile_resize", 'S', 'PRESS')
         _KEYMAPS.append((km, kmi))
         kmi = km.keymap_items.new("cpc.component_resize", 'S', 'PRESS')
         _KEYMAPS.append((km, kmi))

@@ -74,6 +74,66 @@ def resolve_profile_placement(state=None, **changes) -> dict:
     return normalize_profile_placement(resolved)
 
 
+def capture_profile_resize_state(state=None, object_scale=(1.0, 1.0, 1.0)) -> dict:
+    """Capture one fixed semantic baseline for a committed-profile S gesture.
+
+    A positive uniform Blender Object Scale can be migrated into CPC's existing
+    placement state without changing the visible result. Uniform Scale and the
+    profile-local Offset X/Y are rebased together because raw Object Scale acts
+    around the object origin. Non-uniform or negative object scale has no
+    unambiguous representation in the CPC placement model.
+    """
+    try:
+        values = tuple(float(value) for value in object_scale)
+    except Exception as exc:
+        raise ProfileTransformError("Object Scale must contain three numeric values") from exc
+    if len(values) != 3 or any(not math.isfinite(value) for value in values):
+        raise ProfileTransformError("Object Scale must contain three finite values")
+
+    factor = sum(values) / 3.0
+    if factor <= 0.0:
+        raise ProfileTransformError("Object Scale must be positive")
+    tolerance = max(1.0e-6, abs(factor) * 1.0e-6)
+    if any(abs(value - factor) > tolerance for value in values):
+        raise ProfileTransformError("Object Scale must be uniform")
+
+    baseline = normalize_profile_placement(state)
+    return resolve_profile_placement(
+        baseline,
+        offset_x=baseline["offset_x"] * factor,
+        offset_y=baseline["offset_y"] * factor,
+        uniform_scale=baseline["uniform_scale"] * factor,
+    )
+
+
+def apply_profile_resize_factor(state, factor) -> dict:
+    """Resolve an absolute S-gesture factor from a captured CPC baseline."""
+    try:
+        factor = float(factor)
+    except Exception as exc:
+        raise ProfileTransformError("Resize factor must be numeric") from exc
+    if not math.isfinite(factor) or factor <= 0.0:
+        raise ProfileTransformError("Resize factor must be greater than zero")
+
+    baseline = normalize_profile_placement(state)
+    return resolve_profile_placement(
+        baseline,
+        uniform_scale=baseline["uniform_scale"] * factor,
+    )
+
+
+def accepted_profile_resize_factor(numeric, current_factor) -> float:
+    """Return the valid factor to commit for a profile resize modal."""
+    text = str(numeric or "").strip()
+    try:
+        factor = float(text) if text else float(current_factor)
+    except Exception as exc:
+        raise ProfileTransformError("Resize factor must be numeric") from exc
+    if not math.isfinite(factor) or factor <= 0.0:
+        raise ProfileTransformError("Resize factor must be greater than zero")
+    return factor
+
+
 def profile_placement_to_json(state) -> str:
     return json.dumps(normalize_profile_placement(state), sort_keys=True, separators=(",", ":"))
 
