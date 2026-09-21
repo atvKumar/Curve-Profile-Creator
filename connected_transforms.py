@@ -351,6 +351,15 @@ def _route_profile_transforms(scene, profiles) -> bool:
             moved = translation.length_squared > (_TRANSLATION_EPS * _TRANSLATION_EPS)
             rotated = abs(rotation_delta) > 1.0e-10
 
+            # A CPC semantic rebuild tags the profile again after we restore the
+            # Blender object matrix. That follow-up depsgraph update has a
+            # neutral raw matrix and must NOT be interpreted as "gesture back to
+            # zero", otherwise it immediately erases the Offset/Rotation just
+            # written by the preceding modal update.
+            if not moved and not rotated:
+                _PROFILE_MATRIX_CACHE[key] = start_matrix.copy()
+                continue
+
             # Keep Blender object transforms neutral. The complete-profile
             # placement lives only in CPC semantic state.
             profile.matrix_world = start_matrix.copy()
@@ -361,11 +370,11 @@ def _route_profile_transforms(scene, profiles) -> bool:
                 settings,
                 bpy.context,
                 profile,
-                offset_x=start_state["offset_x"] + (float(translation.x) if moved else 0.0),
-                offset_y=start_state["offset_y"] + (float(translation.y) if moved else 0.0),
-                rotation=start_state["rotation"] + (rotation_delta if rotated else 0.0),
+                offset_x=start_state["offset_x"] + float(translation.x),
+                offset_y=start_state["offset_y"] + float(translation.y),
+                rotation=start_state["rotation"] + rotation_delta,
             )
-            changed = changed or moved or rotated
+            changed = True
     except Exception as exc:
         print(f"[Curve Profile Creator] profile transform routing warning: {exc}")
         for profile in profiles:
