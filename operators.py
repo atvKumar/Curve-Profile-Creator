@@ -2633,6 +2633,11 @@ class CPC_OT_SweepSelectedEdges(Operator):
             self.report({'ERROR'}, "Choose or commit an active profile first")
             return {'CANCELLED'}
 
+        # Resolve the complete profile through the same canonical state used by
+        # post-placement edits. This makes transform-before-sweep and
+        # transform-after-sweep consume identical profile geometry.
+        properties.ensure_profile_placement_applied(settings, context, profile)
+
         source = context.object
         paths = geometry.selected_edge_paths_world(source)
         if not paths:
@@ -2689,6 +2694,10 @@ class CPC_OT_ApplyProfileToCurve(Operator):
         if path == profile:
             self.report({'ERROR'}, "Select a path curve, not the profile itself")
             return {'CANCELLED'}
+
+        # Applying a profile after its CPC transform must be identical to
+        # applying first and then editing the same semantic placement state.
+        properties.ensure_profile_placement_applied(settings, context, profile)
 
         data = path.data
         # AUTO respects an existing curve's 2D/3D choice. Explicit modes are
