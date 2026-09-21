@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from . import architectural_components
+from . import architectural_components, architectural_recipes, primitives
 
 
 @dataclass(frozen=True)
@@ -194,6 +194,123 @@ def fields_for(obj):
         return []
     controller = architectural_components.controller_for(obj) if obj.get("cpc_arch_instance_id") else None
     return _architectural_fields(obj, controller) if controller else _basic_fields(obj)
+
+
+def capture_uniform_resize_state(obj):
+    """Capture authoritative CPC construction dimensions for one S/Size gesture."""
+    if not obj or obj.type != 'CURVE' or not obj.get("cpc_part") or not obj.get("cpc_parametric"):
+        return None
+
+    controller = architectural_components.controller_for(obj) if obj.get("cpc_arch_instance_id") else None
+    if controller:
+        return {
+            "kind": "PACKED",
+            "controller": controller,
+            "component_id": str(controller.get("cpc_arch_component_id", "") or ""),
+            "params": architectural_components.controller_parameters(controller),
+        }
+
+    return {
+        "kind": "BASIC",
+        "object": obj,
+        "width": float(obj.cpc_param_width),
+        "height": float(obj.cpc_param_height),
+        "arc_depth": float(obj.cpc_param_arc_depth),
+        "shape_mode": str(obj.cpc_param_shape_mode),
+        "bias": float(obj.cpc_param_bias),
+        "fullness": float(obj.cpc_param_fullness),
+        "concave_fullness": float(obj.cpc_param_concave_fullness),
+        "convex_fullness": float(obj.cpc_param_convex_fullness),
+        "arc_construction_mode": str(obj.cpc_param_arc_construction_mode),
+    }
+
+
+def uniform_resize_scope(obj):
+    """Objects whose raw Blender scale belongs to the same semantic component."""
+    if not obj:
+        return []
+    controller = architectural_components.controller_for(obj) if obj.get("cpc_arch_instance_id") else None
+    if controller:
+        return architectural_components.instance_parts(controller)
+    return [obj]
+
+
+def apply_uniform_resize_state(obj, state, factor, context=None, *, preserve_anchor=True, propagate_connected=True):
+    """Regenerate CPC construction geometry from captured dimensions × factor.
+
+    Dimensionless semantics (Bias, Fullness, flips, Rotation Offset and
+    construction mode) come from the captured state and are not scaled.
+    """
+    if not state:
+        return False
+    try:
+        factor = float(factor)
+    except Exception:
+        return False
+    if factor <= 0.0:
+        return False
+
+    if state.get("kind") == "PACKED":
+        controller = state.get("controller")
+        if not controller:
+            return False
+        component_id = str(state.get("component_id", "") or "")
+        params = architectural_recipes.scale_length_parameters(
+            component_id,
+            state.get("params", {}),
+            factor,
+        )
+        if not architectural_components.apply_parameters(controller, params, context):
+            return False
+        for part in architectural_components.instance_parts(controller):
+            part["cpc_scale"] = 1.0
+        return True
+
+    target = state.get("object") or obj
+    if not target or target.type != 'CURVE' or not target.get("cpc_parametric"):
+        return False
+
+    width = max(float(state["width"]) * factor, 1.0e-6)
+    height = max(float(state["height"]) * factor, 1.0e-6)
+    arc_depth = max(float(state["arc_depth"]) * factor, 1.0e-6)
+
+    target["_cpc_param_initializing"] = True
+    try:
+        target.cpc_param_width = width
+        target.cpc_param_height = height
+        target.cpc_param_arc_depth = arc_depth
+        target.cpc_param_shape_mode = str(state["shape_mode"])
+        target.cpc_param_bias = float(state["bias"])
+        target.cpc_param_fullness = float(state["fullness"])
+        target.cpc_param_concave_fullness = float(state["concave_fullness"])
+        target.cpc_param_convex_fullness = float(state["convex_fullness"])
+        target.cpc_param_arc_construction_mode = str(state["arc_construction_mode"])
+    finally:
+        target["_cpc_param_initializing"] = False
+
+    settings = None
+    if context is not None and getattr(context, "scene", None) is not None:
+        settings = getattr(context.scene, "cpc_settings", None)
+    maintain = bool(getattr(settings, "maintain_connected_parts", True)) if propagate_connected else False
+    tolerance = float(getattr(settings, "merge_tolerance", 0.0005))
+
+    primitives.update_object_geometry(
+        target,
+        width=width,
+        height=height,
+        shape_mode=str(state["shape_mode"]),
+        bias=float(state["bias"]),
+        fullness=float(state["fullness"]),
+        concave_fullness=float(state["concave_fullness"]),
+        convex_fullness=float(state["convex_fullness"]),
+        arc_construction_mode=str(state["arc_construction_mode"]),
+        arc_depth=arc_depth,
+        preserve_anchor=bool(preserve_anchor),
+        propagate_connected=maintain,
+        connection_tolerance=tolerance,
+    )
+    target["cpc_scale"] = 1.0
+    return True
 
 
 def field_by_id(obj, field_id):
