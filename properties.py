@@ -273,6 +273,8 @@ def set_profile_placement_state(settings, context, profile=None, state=None, **c
     target.update(changes)
     target = profile_transforms.normalize_profile_placement(target)
 
+    preserve_authority = _profile_recipe_was_authoritative(profile)
+
     key = _profile_key(profile)
     baseline = _PROFILE_ADJUST_BASELINES.get(key)
     if not _snapshot_matches_curve(baseline, profile.data):
@@ -281,7 +283,6 @@ def set_profile_placement_state(settings, context, profile=None, state=None, **c
     if not _restore_curve_geometry(profile.data, baseline):
         return current
 
-    preserve_authority = _profile_recipe_was_authoritative(profile)
     profile_transforms.set_profile_placement_state(profile, target)
     profile.data.transform(profile_transforms.build_profile_placement_matrix(target))
 
