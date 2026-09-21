@@ -143,7 +143,7 @@ def _placement_overlay_lines(op, context):
         lines.append("Ctrl snap • Shift fine • Enter accept • Esc cancel")
         return lines
 
-    lines.append(f"Scale  {float(getattr(op, '_scale', 1.0)):.3f}× • Auto Align {'On' if getattr(op, '_auto_align', True) else 'Off'}")
+    lines.append(f"Size  {float(getattr(op, '_semantic_size', 1.0)):.3f}× • Auto Align {'On' if getattr(op, '_auto_align', True) else 'Off'}")
     try:
         params = op._placement_parameter_map()
         shortcuts = placement_parameters.shortcut_text(params)
@@ -552,6 +552,7 @@ class CPC_OT_PlacePart(Operator):
 
     _obj = None
     _scale = 1.0
+    _semantic_size = 1.0
     _flip_x = False
     _flip_y = False
     _rotation_offset = 0.0
@@ -936,6 +937,28 @@ class CPC_OT_PlacePart(Operator):
         if self._dimension_target is not None:
             self._orient_preview(context, self._dimension_target, self._dimension_outward)
 
+    def _resize_preview_semantic(self, context, factor):
+        """Uniformly resize preview construction dimensions; never Object Scale."""
+        if not self._obj:
+            return False
+        state = viewport_semantics.capture_uniform_resize_state(self._obj)
+        if not state:
+            return False
+        if not viewport_semantics.apply_uniform_resize_state(
+            self._obj,
+            state,
+            factor,
+            context,
+            preserve_anchor=False,
+            propagate_connected=False,
+        ):
+            return False
+        self._semantic_size = max(0.00001, float(self._semantic_size) * float(factor))
+        self._scale = 1.0
+        if self._current_target is not None:
+            self._orient_preview(context, self._current_target, self._current_outward)
+        return True
+
     def _begin_dimension_adjust(self, context, event, mode):
         descriptors = placement_parameters.by_hotkey_all(self._placement_parameter_map(), mode)
         if not descriptors:
@@ -1109,6 +1132,7 @@ class CPC_OT_PlacePart(Operator):
         self._obj = obj
         self._initial_part_name = str(part_name)
         self._scale = initial_scale
+        self._semantic_size = 1.0
         self._flip_x = False
         self._flip_y = False
         self._rotation_offset = 0.0
@@ -1145,7 +1169,7 @@ class CPC_OT_PlacePart(Operator):
         dimension_keys = ("  " + dimension_keys.replace(" • ", "  ")) if dimension_keys else ""
         context.workspace.status_text_set(
             "Place Profile Part | LMB/Enter: Commit  RMB/Esc: Cancel  "
-            f"Tab: Swap End  X/Y: Flip  Wheel: Scale  R: Rotate{dimension_keys}  A: Auto Align"
+            f"Tab: Swap End  X/Y: Flip  Wheel: Size  R: Rotate{dimension_keys}  A: Auto Align"
         )
 
         if event.type == 'MOUSEMOVE':
@@ -1226,8 +1250,8 @@ class CPC_OT_PlacePart(Operator):
             factor = 1.02 if event.shift else 1.10
             if event.type == 'WHEELDOWNMOUSE':
                 factor = 1.0 / factor
-            self._scale = max(0.00001, self._scale * factor)
-            self._refresh_preview(context, event)
+            if self._resize_preview_semantic(context, factor):
+                self._refresh_preview(context, event)
             return {'RUNNING_MODAL'}
 
         return {'RUNNING_MODAL'}
@@ -1340,6 +1364,25 @@ class CPC_OT_PlaceArchitecturalComponent(Operator):
         if self._dimension_target is not None:
             self._orient_preview(context, self._dimension_target, self._dimension_outward)
 
+    def _resize_preview_semantic(self, context, factor):
+        """Resize the packed recipe parameters, then regenerate its preview."""
+        self._arch_params = architectural_recipes.scale_length_parameters(
+            self._component_id,
+            self._arch_params,
+            factor,
+        )
+        self._local_matrices = architectural_components.refresh_preview(
+            self._obj,
+            self._parts,
+            self._component_id,
+            self._arch_params,
+        )
+        self._semantic_size = max(0.00001, float(self._semantic_size) * float(factor))
+        self._scale = 1.0
+        if self._current_target is not None:
+            self._orient_preview(context, self._current_target, self._current_outward)
+        return True
+
     def invoke(self, context, event):
         settings = _settings(context)
         self._component_id = (
@@ -1376,6 +1419,7 @@ class CPC_OT_PlaceArchitecturalComponent(Operator):
             _ensure_component_id(obj)
 
         self._scale = 1.0
+        self._semantic_size = 1.0
         self._flip_x = False
         self._flip_y = False
         self._rotation_offset = 0.0
@@ -2727,6 +2771,44 @@ class CPC_OT_ApplyProfileToCurve(Operator):
         return {'FINISHED'}
 
 
+def _selected_parametric_component(context):
+    obj = getattr(context, "object", None)
+    if (
+        obj
+        and obj.type == 'CURVE'
+        and obj.get("cpc_part")
+        and obj.get("cpc_parametric")
+        and not obj.get("cpc_preview")
+    ):
+        return obj
+    return None
+
+
+class CPC_OT_ComponentResize(Operator):
+    bl_idname = "cpc.component_resize"
+    bl_label = "Resize CPC Component"
+    bl_description = "Use Blender Scale as semantic CPC uniform resize"
+    bl_options = {'INTERNAL'}
+
+    @classmethod
+    def poll(cls, context):
+        return bool(
+            context.mode == 'OBJECT'
+            and context.area
+            and context.area.type == 'VIEW_3D'
+            and _selected_parametric_component(context)
+        )
+
+    def invoke(self, context, event):
+        obj = _selected_parametric_component(context)
+        if not obj:
+            return {'CANCELLED'}
+        if not connected_transforms.begin_component_resize(obj):
+            return {'CANCELLED'}
+        result = bpy.ops.transform.resize('INVOKE_DEFAULT')
+        return {'FINISHED'} if 'RUNNING_MODAL' in result or 'FINISHED' in result else result
+
+
 def _selected_committed_profile(context):
     obj = getattr(context, "object", None)
     if (
@@ -2918,6 +3000,7 @@ _CLASSES = (
     CPC_OT_RefreshUserProfiles,
     CPC_OT_SweepSelectedEdges,
     CPC_OT_ApplyProfileToCurve,
+    CPC_OT_ComponentResize,
     CPC_OT_ProfileTranslate,
     CPC_OT_ProfileRotate,
     CPC_OT_FlipActiveProfileX,
@@ -2947,6 +3030,8 @@ def register():
         kmi = km.keymap_items.new("cpc.profile_translate", 'G', 'PRESS')
         _KEYMAPS.append((km, kmi))
         kmi = km.keymap_items.new("cpc.profile_rotate", 'R', 'PRESS')
+        _KEYMAPS.append((km, kmi))
+        kmi = km.keymap_items.new("cpc.component_resize", 'S', 'PRESS')
         _KEYMAPS.append((km, kmi))
 
 
