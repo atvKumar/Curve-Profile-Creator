@@ -528,6 +528,9 @@ class CPC_PT_Main(Panel):
             hint = advanced.row()
             hint.enabled = False
             hint.label(text="Blank = Blender extension user storage / profiles")
+            persistent = advanced.row()
+            persistent.enabled = False
+            persistent.label(text="Custom folder is stored in CPC Preferences and reused across Blender files")
             note = advanced.row()
             note.enabled = False
             note.label(text=".cpcprofile JSON is authoritative; PNG is a regenerable thumbnail")
