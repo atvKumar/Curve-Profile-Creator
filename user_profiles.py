@@ -29,6 +29,7 @@ _INDEX_LIBRARY_DIR = ""
 _INDEX_READY = False
 _VISIBLE_COUNT = 0
 _FILTER_UPDATE_GUARD = False
+_LIBRARY_PATH_SYNC_GUARD = False
 
 THUMBNAIL_SIZE = 256
 LIBRARY_FORMAT = "CPC_LIBRARY"
@@ -91,9 +92,50 @@ def default_library_dir() -> str:
     return os.path.normpath(path) if path else ""
 
 
+def _addon_preferences():
+    try:
+        addon = bpy.context.preferences.addons.get(__package__)
+        return getattr(addon, "preferences", None) if addon else None
+    except Exception:
+        return None
+
+
+def preferred_library_path() -> str:
+    prefs = _addon_preferences()
+    return str(getattr(prefs, "user_profile_library_path", "") or "").strip() if prefs else ""
+
+
+def sync_library_path_preferences(settings) -> None:
+    """Keep the legacy Scene field synchronized with persistent CPC preferences.
+
+    Existing .blend files that already carry a custom Scene path seed the new
+    preference the first time they are opened. Once a persistent preference
+    exists it becomes the shared CPC library location for all scenes.
+    """
+    global _LIBRARY_PATH_SYNC_GUARD
+    if _LIBRARY_PATH_SYNC_GUARD or settings is None:
+        return
+    prefs = _addon_preferences()
+    if prefs is None:
+        return
+
+    scene_value = str(getattr(settings, "user_profile_library_path", "") or "").strip()
+    pref_value = str(getattr(prefs, "user_profile_library_path", "") or "").strip()
+    _LIBRARY_PATH_SYNC_GUARD = True
+    try:
+        if pref_value:
+            if scene_value != pref_value:
+                settings.user_profile_library_path = pref_value
+        elif scene_value:
+            prefs.user_profile_library_path = scene_value
+    finally:
+        _LIBRARY_PATH_SYNC_GUARD = False
+
 
 def library_dir(settings=None) -> str:
     configured = str(getattr(settings, "user_profile_library_path", "") or "").strip() if settings else ""
+    if not configured:
+        configured = preferred_library_path()
     if configured:
         path = bpy.path.abspath(configured)
         os.makedirs(path, exist_ok=True)
@@ -239,6 +281,15 @@ def _refresh_category_names(settings, discovered_categories) -> None:
     base = registered if registry_exists else list(STARTER_CATEGORIES)
     _CATEGORY_NAMES = _unique_categories([*base, *discovered_categories])
     _rebuild_category_enum(settings)
+
+    # Make the active library self-describing immediately. Previously this file
+    # appeared only after Add/Rename Category, which made a newly selected
+    # external library look incomplete.
+    if not registry_exists:
+        try:
+            _write_library_registry(settings, _CATEGORY_NAMES)
+        except OSError:
+            pass
 
 
 def _ensure_index(settings=None) -> None:
@@ -977,11 +1028,54 @@ def on_search_changed(settings, context):
     rebuild_visible(settings)
 
 
-def on_library_path_changed(settings, context):
+def _refresh_after_library_path_change(settings) -> None:
     global _INDEX_READY, _INDEX_LIBRARY_DIR
     _INDEX_READY = False
     _INDEX_LIBRARY_DIR = ""
     refresh_library(settings, force_reload=True)
+
+
+def on_library_path_changed(settings, context):
+    global _LIBRARY_PATH_SYNC_GUARD
+    if _LIBRARY_PATH_SYNC_GUARD:
+        return
+
+    value = str(getattr(settings, "user_profile_library_path", "") or "").strip()
+    prefs = _addon_preferences()
+    _LIBRARY_PATH_SYNC_GUARD = True
+    try:
+        if prefs is not None and str(getattr(prefs, "user_profile_library_path", "") or "").strip() != value:
+            prefs.user_profile_library_path = value
+        for scene in bpy.data.scenes:
+            scene_settings = getattr(scene, "cpc_settings", None)
+            if scene_settings is not None and scene_settings != settings:
+                if str(getattr(scene_settings, "user_profile_library_path", "") or "").strip() != value:
+                    scene_settings.user_profile_library_path = value
+    finally:
+        _LIBRARY_PATH_SYNC_GUARD = False
+
+    _refresh_after_library_path_change(settings)
+
+
+def on_preference_library_path_changed(preferences, context):
+    global _LIBRARY_PATH_SYNC_GUARD
+    if _LIBRARY_PATH_SYNC_GUARD:
+        return
+
+    value = str(getattr(preferences, "user_profile_library_path", "") or "").strip()
+    _LIBRARY_PATH_SYNC_GUARD = True
+    try:
+        for scene in bpy.data.scenes:
+            scene_settings = getattr(scene, "cpc_settings", None)
+            if scene_settings is not None:
+                if str(getattr(scene_settings, "user_profile_library_path", "") or "").strip() != value:
+                    scene_settings.user_profile_library_path = value
+    finally:
+        _LIBRARY_PATH_SYNC_GUARD = False
+
+    settings = getattr(getattr(context, "scene", None), "cpc_settings", None) if context else None
+    if settings is not None:
+        _refresh_after_library_path_change(settings)
 
 
 def _sample_geometry(snapshot, steps=24):
