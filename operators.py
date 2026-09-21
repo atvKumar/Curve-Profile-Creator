@@ -2787,8 +2787,16 @@ def _selected_parametric_component(context):
 class CPC_OT_ComponentResize(Operator):
     bl_idname = "cpc.component_resize"
     bl_label = "Resize CPC Component"
-    bl_description = "Use Blender Scale as semantic CPC uniform resize"
-    bl_options = {'INTERNAL'}
+    bl_description = "Uniformly resize CPC construction dimensions while keeping Blender Object Scale unchanged"
+    bl_options = {'REGISTER', 'UNDO', 'BLOCKING'}
+
+    _target = None
+    _state = None
+    _pivot_region = None
+    _start_distance = 1.0
+    _start_mouse_x = 0.0
+    _numeric = ""
+    _factor = 1.0
 
     @classmethod
     def poll(cls, context):
@@ -2799,14 +2807,115 @@ class CPC_OT_ComponentResize(Operator):
             and _selected_parametric_component(context)
         )
 
+    def _apply_factor(self, context, factor):
+        factor = max(float(factor), 0.001)
+        if not viewport_semantics.apply_uniform_resize_state(
+            self._target,
+            self._state,
+            factor,
+            context,
+            preserve_anchor=True,
+            propagate_connected=True,
+        ):
+            return False
+        self._factor = factor
+        context.workspace.status_text_set(
+            f"CPC Size {factor:.4f}× | Mouse scale • Type factor • Shift fine • Enter/LMB accept • Esc/RMB cancel"
+        )
+        if context.area:
+            context.area.tag_redraw()
+        return True
+
     def invoke(self, context, event):
         obj = _selected_parametric_component(context)
         if not obj:
             return {'CANCELLED'}
-        if not connected_transforms.begin_component_resize(obj):
+
+        state = viewport_semantics.capture_uniform_resize_state(obj)
+        if not state:
+            self.report({'ERROR'}, "Could not read CPC construction dimensions")
             return {'CANCELLED'}
-        result = bpy.ops.transform.resize('INVOKE_DEFAULT')
-        return {'FINISHED'} if 'RUNNING_MODAL' in result or 'FINISHED' in result else result
+
+        self._target = obj
+        self._state = state
+        self._numeric = ""
+        self._factor = 1.0
+        self._start_mouse_x = float(event.mouse_region_x)
+
+        pivot = view3d_utils.location_3d_to_region_2d(
+            context.region,
+            context.space_data.region_3d,
+            obj.matrix_world.translation,
+            default=None,
+        )
+        self._pivot_region = pivot.copy() if pivot is not None else None
+        if self._pivot_region is not None:
+            mouse = Vector((event.mouse_region_x, event.mouse_region_y))
+            self._start_distance = max((mouse - self._pivot_region).length, 8.0)
+        else:
+            self._start_distance = 1.0
+
+        context.workspace.status_text_set(
+            "CPC Size 1.0000× | Mouse scale • Type factor • Shift fine • Enter/LMB accept • Esc/RMB cancel"
+        )
+        context.window_manager.modal_handler_add(self)
+        return {'RUNNING_MODAL'}
+
+    def modal(self, context, event):
+        if event.type == 'MOUSEMOVE' and not self._numeric:
+            if self._pivot_region is not None:
+                mouse = Vector((event.mouse_region_x, event.mouse_region_y))
+                raw = max((mouse - self._pivot_region).length / self._start_distance, 0.001)
+            else:
+                raw = max(math.exp((float(event.mouse_region_x) - self._start_mouse_x) * 0.005), 0.001)
+            factor = 1.0 + (raw - 1.0) * (0.1 if event.shift else 1.0)
+            self._apply_factor(context, factor)
+            return {'RUNNING_MODAL'}
+
+        if event.value == 'PRESS':
+            if event.type in {'ESC', 'RIGHTMOUSE'}:
+                self._apply_factor(context, 1.0)
+                context.workspace.status_text_set(None)
+                return {'CANCELLED'}
+
+            if event.type in {'LEFTMOUSE', 'RET', 'NUMPAD_ENTER'}:
+                if self._numeric:
+                    try:
+                        value = float(self._numeric)
+                    except ValueError:
+                        value = self._factor
+                    if value > 0.0:
+                        self._apply_factor(context, value)
+                context.workspace.status_text_set(None)
+                return {'FINISHED'}
+
+            if event.type == 'BACK_SPACE':
+                self._numeric = self._numeric[:-1]
+                if self._numeric:
+                    try:
+                        value = float(self._numeric)
+                    except ValueError:
+                        value = None
+                    if value is not None and value > 0.0:
+                        self._apply_factor(context, value)
+                else:
+                    self._apply_factor(context, 1.0)
+                return {'RUNNING_MODAL'}
+
+            char = CPC_OT_PlacePart._numeric_char(event)
+            if char:
+                if char == '-' or (char == '.' and '.' in self._numeric):
+                    return {'RUNNING_MODAL'}
+                self._numeric += char
+                try:
+                    value = float(self._numeric)
+                except ValueError:
+                    value = None
+                if value is not None and value > 0.0:
+                    self._apply_factor(context, value)
+                return {'RUNNING_MODAL'}
+
+        return {'RUNNING_MODAL'}
 
 
 def _selected_committed_profile(context):
