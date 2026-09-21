@@ -2918,6 +2918,111 @@ class CPC_OT_ComponentResize(Operator):
         return {'RUNNING_MODAL'}
 
 
+class CPC_OT_ComponentRotate(Operator):
+    bl_idname = "cpc.component_rotate"
+    bl_label = "Rotate CPC Component"
+    bl_description = "Use Blender R as the semantic CPC Part Rotation offset"
+    bl_options = {'REGISTER', 'UNDO', 'BLOCKING'}
+
+    _target = None
+    _start_rotation = 0.0
+    _start_mouse_x = 0.0
+    _last_mouse_x = 0.0
+    _raw_delta = 0.0
+    _numeric = ""
+
+    @classmethod
+    def poll(cls, context):
+        return bool(
+            context.mode == 'OBJECT'
+            and context.area
+            and context.area.type == 'VIEW_3D'
+            and _selected_parametric_component(context)
+        )
+
+    def _apply_delta(self, context, delta):
+        target = self._start_rotation + float(delta)
+        self._target.cpc_part_rotation = target
+        context.workspace.status_text_set(
+            f"CPC Part Rotation Δ {math.degrees(delta):.2f}° "
+            f"(Total {math.degrees(target):.2f}°) | Ctrl snap • Shift fine • Type angle • Enter/LMB accept • Esc/RMB cancel"
+        )
+        if context.area:
+            context.area.tag_redraw()
+
+    def invoke(self, context, event):
+        obj = _selected_parametric_component(context)
+        if not obj:
+            return {'CANCELLED'}
+        self._target = obj
+        self._start_rotation = float(getattr(obj, "cpc_part_rotation", 0.0))
+        self._start_mouse_x = float(event.mouse_region_x)
+        self._last_mouse_x = float(event.mouse_region_x)
+        self._raw_delta = 0.0
+        self._numeric = ""
+        context.workspace.status_text_set(
+            f"CPC Part Rotation 0.00° (Total {math.degrees(self._start_rotation):.2f}°) | "
+            "Ctrl snap • Shift fine • Type angle • Enter/LMB accept • Esc/RMB cancel"
+        )
+        context.window_manager.modal_handler_add(self)
+        return {'RUNNING_MODAL'}
+
+    def modal(self, context, event):
+        if event.type == 'MOUSEMOVE' and not self._numeric:
+            dx = float(event.mouse_region_x) - self._last_mouse_x
+            self._last_mouse_x = float(event.mouse_region_x)
+            sensitivity = 0.005 * (0.2 if event.shift else 1.0)
+            self._raw_delta += dx * sensitivity
+            delta = self._raw_delta
+            if event.ctrl:
+                snap = math.radians(max(1.0, float(_settings(context).rotation_snap_degrees)))
+                delta = round(delta / snap) * snap
+            self._apply_delta(context, delta)
+            return {'RUNNING_MODAL'}
+
+        if event.value == 'PRESS':
+            if event.type in {'ESC', 'RIGHTMOUSE'}:
+                self._target.cpc_part_rotation = self._start_rotation
+                context.workspace.status_text_set(None)
+                return {'CANCELLED'}
+
+            if event.type in {'LEFTMOUSE', 'RET', 'NUMPAD_ENTER'}:
+                if self._numeric and self._numeric not in {'-', '.', '-.'}:
+                    try:
+                        self._apply_delta(context, math.radians(float(self._numeric)))
+                    except ValueError:
+                        pass
+                context.workspace.status_text_set(None)
+                return {'FINISHED'}
+
+            if event.type == 'BACK_SPACE':
+                self._numeric = self._numeric[:-1]
+                if self._numeric and self._numeric not in {'-', '.', '-.'}:
+                    try:
+                        self._apply_delta(context, math.radians(float(self._numeric)))
+                    except ValueError:
+                        pass
+                else:
+                    self._apply_delta(context, 0.0)
+                return {'RUNNING_MODAL'}
+
+            char = CPC_OT_PlacePart._numeric_char(event)
+            if char:
+                if char == '-' and self._numeric:
+                    return {'RUNNING_MODAL'}
+                if char == '.' and '.' in self._numeric:
+                    return {'RUNNING_MODAL'}
+                self._numeric += char
+                if self._numeric not in {'-', '.', '-.'}:
+                    try:
+                        self._apply_delta(context, math.radians(float(self._numeric)))
+                    except ValueError:
+                        pass
+                return {'RUNNING_MODAL'}
+
+        return {'RUNNING_MODAL'}
+
+
 def _selected_committed_profile(context):
     obj = getattr(context, "object", None)
     if (
@@ -3110,6 +3215,7 @@ _CLASSES = (
     CPC_OT_SweepSelectedEdges,
     CPC_OT_ApplyProfileToCurve,
     CPC_OT_ComponentResize,
+    CPC_OT_ComponentRotate,
     CPC_OT_ProfileTranslate,
     CPC_OT_ProfileRotate,
     CPC_OT_FlipActiveProfileX,
@@ -3139,6 +3245,8 @@ def register():
         kmi = km.keymap_items.new("cpc.profile_translate", 'G', 'PRESS')
         _KEYMAPS.append((km, kmi))
         kmi = km.keymap_items.new("cpc.profile_rotate", 'R', 'PRESS')
+        _KEYMAPS.append((km, kmi))
+        kmi = km.keymap_items.new("cpc.component_rotate", 'R', 'PRESS')
         _KEYMAPS.append((km, kmi))
         kmi = km.keymap_items.new("cpc.component_resize", 'S', 'PRESS')
         _KEYMAPS.append((km, kmi))
