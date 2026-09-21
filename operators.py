@@ -2708,8 +2708,7 @@ class CPC_OT_ApplyProfileToCurve(Operator):
             data.dimensions = '3D'
         data.bevel_mode = 'OBJECT'
         data.bevel_object = profile
-        geometry.set_curve_fill_both(data)
-        data.use_fill_caps = settings.fill_caps
+        geometry.set_sweep_caps(data, settings.fill_caps)
         if data.dimensions == '3D':
             data.twist_mode = settings.twist_mode
         data.update_tag()
