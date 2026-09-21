@@ -228,6 +228,14 @@ def _params_from_controller(controller):
     })
 
 
+def controller_parameters(controller):
+    """Return the normalized authoritative parameter set for a packed instance."""
+    controller = controller_for(controller) or controller
+    if not controller:
+        return {}
+    return _params_from_controller(controller)
+
+
 def _set_controller_rna(controller, params):
     controller["_cpc_arch_initializing"] = True
     try:
@@ -254,6 +262,20 @@ def _set_controller_rna(controller, params):
         controller.cpc_arch_equal_steps = bool(params["equal_steps"])
     finally:
         controller["_cpc_arch_initializing"] = False
+
+
+def apply_parameters(controller, params, context=None):
+    """Apply one complete packed parameter set and regenerate once."""
+    controller = controller_for(controller) or controller
+    if not controller or not controller.get("cpc_arch_controller"):
+        return False
+    component_id = str(controller.get("cpc_arch_component_id", "") or "")
+    if not component_id:
+        return False
+    normalized = architectural_recipes.normalize_parameters(component_id, params)
+    _set_controller_rna(controller, normalized)
+    update_instance(controller, context)
+    return True
 
 
 def initialise_instance(parts, component_id, params, anchor_index=0):
