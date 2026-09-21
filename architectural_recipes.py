@@ -45,6 +45,14 @@ ARCHITECTURAL_LABELS = {item[0]: item[1] for item in ARCHITECTURAL_COMPONENT_ITE
 ALL_COMPONENT_LABELS = dict(ARCHITECTURAL_LABELS)
 ALL_COMPONENT_LABELS.update(constructed_shapes.CONSTRUCTED_LABELS)
 
+LENGTH_PARAMETER_KEYS = (
+    "width", "height", "arc_depth", "secondary_arc_depth",
+    "fillet_a", "fillet_b", "fascia",
+    "secondary_width", "secondary_height",
+    "tread1", "rise1", "tread2", "rise2",
+)
+
+
 DEFAULT_PARAMETERS = {
     "width": 0.030,
     "height": 0.030,
@@ -162,6 +170,22 @@ def normalize_parameters(component_id: str, values=None) -> Dict[str, float | bo
         p["tread2"] = p["tread1"]
         p["rise2"] = p["rise1"]
     return p
+
+
+def scale_length_parameters(component_id: str, values, factor: float) -> Dict[str, float | bool | str]:
+    """Uniformly resize only dimensional packed-component parameters."""
+    try:
+        factor = float(factor)
+    except Exception as exc:
+        raise ValueError("Resize factor must be numeric") from exc
+    if factor <= 0.0:
+        raise ValueError("Resize factor must be greater than zero")
+
+    source = normalize_parameters(component_id, values)
+    scaled = dict(source)
+    for key in LENGTH_PARAMETER_KEYS:
+        scaled[key] = max(float(source[key]) * factor, 1.0e-6)
+    return normalize_parameters(component_id, scaled)
 
 
 def build_recipe(component_id: str, values=None) -> List[RecipePart]:
