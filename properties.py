@@ -269,9 +269,10 @@ def set_profile_placement_state(settings, context, profile=None, state=None, **c
         return profile_transforms.neutral_profile_placement()
 
     current = profile_transforms.profile_placement_state(profile)
-    target = dict(current if state is None else state)
-    target.update(changes)
-    target = profile_transforms.normalize_profile_placement(target)
+    target = profile_transforms.resolve_profile_placement(
+        current if state is None else state,
+        **changes,
+    )
 
     preserve_authority = _profile_recipe_was_authoritative(profile)
 
@@ -295,6 +296,20 @@ def set_profile_placement_state(settings, context, profile=None, state=None, **c
     _sync_adjustment_controls(settings, profile)
     _refresh_profile_dependents(context, profile)
     return target
+
+
+def ensure_profile_placement_applied(settings, context, profile=None):
+    """Rebuild visible geometry from neutral data and the stored CPC placement.
+
+    Sweep/application calls use this before consuming a profile. Later edits use
+    the same set_profile_placement_state() path, making pre-placement and
+    post-placement transforms geometrically equivalent.
+    """
+    profile = profile or getattr(settings, "active_profile", None)
+    if not profile or profile.type != 'CURVE':
+        return profile_transforms.neutral_profile_placement()
+    state = profile_transforms.profile_placement_state(profile)
+    return set_profile_placement_state(settings, context, profile, state=state)
 
 
 def _apply_live_profile_adjustment(settings, context, source=None):
