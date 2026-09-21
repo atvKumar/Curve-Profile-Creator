@@ -7,7 +7,7 @@ from bpy.props import EnumProperty, IntProperty, StringProperty
 from mathutils import Matrix, Vector, geometry as mu_geometry
 from bpy_extras import view3d_utils
 
-from . import architectural_components, architectural_recipes, compound_geometry, geometry, interaction_units, junctions, library, placement_parameters, primitives, profile_presets, profile_transforms, properties, primitive_geometry, user_profiles, viewport_overlay, viewport_semantics
+from . import architectural_components, architectural_recipes, compound_geometry, connected_transforms, geometry, interaction_units, junctions, library, placement_parameters, primitives, profile_presets, profile_transforms, properties, primitive_geometry, user_profiles, viewport_overlay, viewport_semantics
 from . import EXTENSION_VERSION
 
 
@@ -2728,6 +2728,75 @@ class CPC_OT_ApplyProfileToCurve(Operator):
         return {'FINISHED'}
 
 
+def _selected_committed_profile(context):
+    obj = getattr(context, "object", None)
+    if (
+        obj
+        and obj.type == 'CURVE'
+        and obj.get("cpc_profile")
+        and not obj.get("cpc_part")
+        and not obj.get("cpc_preview")
+    ):
+        return obj
+    return None
+
+
+class CPC_OT_ProfileTranslate(Operator):
+    bl_idname = "cpc.profile_translate"
+    bl_label = "Move CPC Profile"
+    bl_description = "Use Blender Move while routing the result into CPC Offset X/Y"
+    bl_options = {'INTERNAL'}
+
+    @classmethod
+    def poll(cls, context):
+        return bool(
+            context.mode == 'OBJECT'
+            and context.area
+            and context.area.type == 'VIEW_3D'
+            and _selected_committed_profile(context)
+        )
+
+    def invoke(self, context, event):
+        profile = _selected_committed_profile(context)
+        if not profile:
+            return {'CANCELLED'}
+        settings = _settings(context)
+        if settings.active_profile != profile:
+            settings.active_profile = profile
+        if not connected_transforms.begin_profile_transform(profile):
+            return {'CANCELLED'}
+        result = bpy.ops.transform.translate('INVOKE_DEFAULT')
+        return {'FINISHED'} if 'RUNNING_MODAL' in result or 'FINISHED' in result else result
+
+
+class CPC_OT_ProfileRotate(Operator):
+    bl_idname = "cpc.profile_rotate"
+    bl_label = "Rotate CPC Profile"
+    bl_description = "Use Blender Rotate while routing the result into CPC Rotation"
+    bl_options = {'INTERNAL'}
+
+    @classmethod
+    def poll(cls, context):
+        return bool(
+            context.mode == 'OBJECT'
+            and context.area
+            and context.area.type == 'VIEW_3D'
+            and _selected_committed_profile(context)
+        )
+
+    def invoke(self, context, event):
+        profile = _selected_committed_profile(context)
+        if not profile:
+            return {'CANCELLED'}
+        settings = _settings(context)
+        if settings.active_profile != profile:
+            settings.active_profile = profile
+        if not connected_transforms.begin_profile_transform(profile):
+            return {'CANCELLED'}
+        result = bpy.ops.transform.rotate('INVOKE_DEFAULT')
+        return {'FINISHED'} if 'RUNNING_MODAL' in result or 'FINISHED' in result else result
+
+
 class CPC_OT_FlipActiveProfileX(Operator):
     bl_idname = "cpc.flip_active_profile_x"
     bl_label = "Flip Profile X"
@@ -2850,6 +2919,8 @@ _CLASSES = (
     CPC_OT_RefreshUserProfiles,
     CPC_OT_SweepSelectedEdges,
     CPC_OT_ApplyProfileToCurve,
+    CPC_OT_ProfileTranslate,
+    CPC_OT_ProfileRotate,
     CPC_OT_FlipActiveProfileX,
     CPC_OT_FlipActiveProfileY,
     CPC_OT_RotateActiveProfile90,
@@ -2868,6 +2939,15 @@ def register():
     if keyconfig is not None:
         km = keyconfig.keymaps.new(name='Object Mode', space_type='EMPTY')
         kmi = km.keymap_items.new("cpc.viewport_dimension_edit", 'E', 'PRESS')
+        _KEYMAPS.append((km, kmi))
+
+        # G/R remain ordinary Blender transforms for every other object. On a
+        # committed CPC profile these contextual wrappers only capture the
+        # gesture baseline, then hand control straight to Blender's own
+        # transform operators.
+        kmi = km.keymap_items.new("cpc.profile_translate", 'G', 'PRESS')
+        _KEYMAPS.append((km, kmi))
+        kmi = km.keymap_items.new("cpc.profile_rotate", 'R', 'PRESS')
         _KEYMAPS.append((km, kmi))
 
 
