@@ -1,4 +1,4 @@
-EXTENSION_VERSION = "0.4.3"
+EXTENSION_VERSION = "0.4.4"
 
 from . import user_profiles, properties, connected_transforms, viewport_overlay, operators, ui
 
