@@ -22,6 +22,7 @@ files = "Save CPC profile presets, categories, and thumbnails"
 paths_exclude_pattern = [
   "__pycache__/",
   "/.git/",
+  "/tests/",
   "/*.zip",
   "*.pyc",
 ]
