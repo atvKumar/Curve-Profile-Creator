@@ -60,6 +60,20 @@ def normalize_profile_placement(value=None) -> dict:
     return state
 
 
+def resolve_profile_placement(state=None, **changes) -> dict:
+    """Resolve absolute complete-profile placement independent of interaction order.
+
+    Each semantic channel is authoritative. Updating one channel never bakes the
+    current visible geometry into another, so equivalent final values always
+    produce the same placement matrix.
+    """
+    resolved = normalize_profile_placement(state)
+    for key in ("offset_x", "offset_y", "rotation", "flip_x", "flip_y", "uniform_scale"):
+        if key in changes:
+            resolved[key] = changes[key]
+    return normalize_profile_placement(resolved)
+
+
 def profile_placement_to_json(state) -> str:
     return json.dumps(normalize_profile_placement(state), sort_keys=True, separators=(",", ":"))
 
