@@ -372,6 +372,25 @@ def _update_uniform_scale(self, context):
     _apply_live_profile_adjustment(self, context, source='X')
 
 
+def _update_fill_caps(self, context):
+    obj = getattr(context, "object", None)
+    if not obj or obj.type != 'CURVE':
+        return
+    try:
+        data = obj.data
+        if obj.get("cpc_sweep") or getattr(data, "bevel_object", None):
+            from . import geometry
+            geometry.set_sweep_caps(data, self.fill_caps)
+            data.update_tag()
+            obj.update_tag()
+            try:
+                context.view_layer.update()
+            except Exception:
+                pass
+    except Exception as exc:
+        print(f"[Curve Profile Creator] sweep caps update warning: {exc}")
+
+
 def _update_smooth_angle(self, context):
     obj = getattr(context, "object", None)
     if not obj:
@@ -1132,8 +1151,9 @@ class CPC_PG_Settings(PropertyGroup):
 
     fill_caps: BoolProperty(
         name="Fill Caps",
-        description="Cap open ends of the generated beveled curve when supported by the profile",
+        description="Control CPC sweep end caps; 2D paths also use None/Both fill consistently",
         default=False,
+        update=_update_fill_caps,
     )
 
     hide_builder_parts: BoolProperty(
