@@ -11,7 +11,7 @@ from bpy.props import (
     PointerProperty,
     StringProperty,
 )
-from bpy.types import PropertyGroup
+from bpy.types import AddonPreferences, PropertyGroup
 
 from .architectural_recipes import ARCHITECTURAL_COMPONENT_ITEMS
 from .constructed_shapes import CONSTRUCTED_SHAPE_ITEMS
@@ -531,6 +531,7 @@ def _initialise_loaded_cpc_state(_dummy=None):
         for scene in bpy.data.scenes:
             if not hasattr(scene, "cpc_settings"):
                 continue
+            user_profiles.sync_library_path_preferences(scene.cpc_settings)
             capture_profile_adjust_baseline(scene.cpc_settings.active_profile)
             _sync_adjustment_controls(scene.cpc_settings, scene.cpc_settings.active_profile)
     except Exception as exc:
@@ -638,6 +639,29 @@ def _update_viewport_guides(self, context):
         viewport_overlay.tag_redraw_all(context)
     except Exception:
         pass
+
+
+def _update_library_preference(self, context):
+    user_profiles.on_preference_library_path_changed(self, context)
+
+
+class CPC_AddonPreferences(AddonPreferences):
+    bl_idname = __package__
+
+    user_profile_library_path: StringProperty(
+        name="User Profile Library",
+        description="Persistent CPC User Profile library folder; blank uses Blender extension user storage",
+        subtype='DIR_PATH',
+        default="",
+        update=_update_library_preference,
+    )
+
+    def draw(self, context):
+        layout = self.layout
+        layout.prop(self, "user_profile_library_path", text="User Profile Library")
+        note = layout.row()
+        note.enabled = False
+        note.label(text="Custom folders are reused across Blender files; blank uses extension-managed storage")
 
 
 class CPC_PG_Settings(PropertyGroup):
@@ -1101,7 +1125,7 @@ class CPC_PG_Settings(PropertyGroup):
     )
 
 
-_CLASSES = (CPC_PG_Settings,)
+_CLASSES = (CPC_AddonPreferences, CPC_PG_Settings)
 
 
 def register():
