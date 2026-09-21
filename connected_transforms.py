@@ -1,25 +1,33 @@
-"""Connected CPC part translation handling.
+"""CPC external-transform routing.
 
-Ordinary Blender translation remains compatible with CPC's
-endpoint-junction graph.  When Maintain Connected Parts is enabled, moving
-any currently connected construction part with Blender G (or by changing its
-Location) translates the complete connected CPC profile rigidly.
+Construction parts keep the validated connected-translation behavior: Blender
+G/Location can move a connected construction graph rigidly when Maintain
+Connected Parts is enabled.
 
-This module deliberately handles translation only.  CPC Part Rotation remains
-the semantic rotation path, and Width/Height/Chord/Depth remain the semantic
-shape-edit paths.
+Committed complete profiles use a different rule in 0.4.4. Blender Move and
+Rotate are treated as input gestures for CPC's authoritative placement state:
+the raw object transform is restored immediately, while Offset X/Y and Rotation
+are updated and the profile is rebuilt through the canonical CPC placement
+matrix. This prevents Blender object transforms from becoming a second source
+of complete-profile placement state.
+
+Component scale/resize remains outside this module and is handled by the later
+semantic-resize work.
 """
 
 from __future__ import annotations
+
+import math
 
 import bpy
 from bpy.app.handlers import persistent
 from mathutils import Matrix, Vector
 
-from . import junctions, library
+from . import junctions, library, profile_transforms
 
 
 _MATRIX_CACHE: dict[int, Matrix] = {}
+_PROFILE_MATRIX_CACHE: dict[int, Matrix] = {}
 _IN_HANDLER = False
 
 _TRANSLATION_EPS = 1.0e-10
@@ -40,6 +48,27 @@ def _eligible(obj) -> bool:
         and obj.get("cpc_part")
         and not obj.get("cpc_preview")
     )
+
+
+def _profile_eligible(obj) -> bool:
+    return bool(
+        obj
+        and isinstance(obj, bpy.types.Object)
+        and obj.type == 'CURVE'
+        and obj.get("cpc_profile")
+        and not obj.get("cpc_part")
+        and not obj.get("cpc_preview")
+    )
+
+
+def _profile_objects():
+    collections = getattr(bpy.data, "collections", None)
+    if collections is None:
+        return []
+    coll = collections.get("CPC_Profiles")
+    if not coll:
+        return []
+    return [obj for obj in coll.objects if _profile_eligible(obj)]
 
 
 def _component_objects():
@@ -73,10 +102,22 @@ def sync_objects(objects):
         sync_object(obj)
 
 
+def _sync_profile_object(obj):
+    if not _profile_eligible(obj):
+        return
+    try:
+        _PROFILE_MATRIX_CACHE[_object_key(obj)] = obj.matrix_world.copy()
+    except Exception:
+        pass
+
+
 def prime_cache():
-    """Rebuild the session-local transform cache from currently editable CPC parts."""
+    """Rebuild session-local external-transform baselines."""
     _MATRIX_CACHE.clear()
+    _PROFILE_MATRIX_CACHE.clear()
     sync_objects(_component_objects())
+    for obj in _profile_objects():
+        _sync_profile_object(obj)
 
 
 def _linear_equal(a: Matrix, b: Matrix, eps=_LINEAR_EPS) -> bool:
@@ -227,6 +268,101 @@ def _updated_original_object(update):
     return id_data
 
 
+def _profile_rigid_delta(old: Matrix, new: Matrix):
+    """Return profile-local XY translation + Z rotation for a rigid 2D delta.
+
+    Scale/shear/tilt are intentionally rejected here. Complete-profile scale is
+    a CPC Uniform Scale semantic and construction-component resizing is handled
+    separately by the resize issues.
+    """
+    try:
+        relative = old.inverted_safe() @ new
+        linear = relative.to_3x3()
+        angle = math.atan2(float(linear[1][0]), float(linear[0][0]))
+        expected = Matrix.Rotation(angle, 3, 'Z')
+        error = max(
+            abs(float(linear[row][col]) - float(expected[row][col]))
+            for row in range(3)
+            for col in range(3)
+        )
+        if error > 1.0e-6:
+            return None
+        translation = relative.translation.copy()
+        return Vector((float(translation.x), float(translation.y), 0.0)), float(angle)
+    except Exception:
+        return None
+
+
+def _route_profile_transforms(scene, profiles) -> bool:
+    """Absorb Blender G/R into CPC placement semantics and restore object matrices."""
+    global _IN_HANDLER
+    if not profiles:
+        return False
+
+    settings = getattr(scene, "cpc_settings", None)
+    if settings is None:
+        return False
+
+    changed = False
+    _IN_HANDLER = True
+    try:
+        # Local import avoids a module-registration cycle.
+        from . import properties
+
+        for profile in profiles:
+            key = _object_key(profile)
+            old = _PROFILE_MATRIX_CACHE.get(key)
+            if old is None:
+                _PROFILE_MATRIX_CACHE[key] = profile.matrix_world.copy()
+                continue
+
+            new = profile.matrix_world.copy()
+            delta = _profile_rigid_delta(old, new)
+            if delta is None:
+                # Unsupported raw scale/shear is left alone for the dedicated
+                # resize work rather than being guessed at here.
+                _PROFILE_MATRIX_CACHE[key] = new
+                continue
+
+            translation, rotation_delta = delta
+            moved = translation.length_squared > (_TRANSLATION_EPS * _TRANSLATION_EPS)
+            rotated = abs(rotation_delta) > 1.0e-10
+            if not moved and not rotated:
+                _PROFILE_MATRIX_CACHE[key] = new
+                continue
+
+            # Restore Blender's object transform before checking recipe authority
+            # or rebuilding visible geometry. CPC state remains the only
+            # persistent complete-profile placement representation.
+            profile.matrix_world = old.copy()
+            profile.update_tag()
+            _PROFILE_MATRIX_CACHE[key] = old.copy()
+
+            state = profile_transforms.profile_placement_state(profile)
+            changes = {}
+            if moved:
+                changes["offset_x"] = state["offset_x"] + float(translation.x)
+                changes["offset_y"] = state["offset_y"] + float(translation.y)
+            if rotated:
+                changes["rotation"] = state["rotation"] + rotation_delta
+
+            properties.set_profile_placement_state(
+                settings,
+                bpy.context,
+                profile,
+                **changes,
+            )
+            changed = True
+    except Exception as exc:
+        print(f"[Curve Profile Creator] profile transform routing warning: {exc}")
+        for profile in profiles:
+            _sync_profile_object(profile)
+    finally:
+        _IN_HANDLER = False
+
+    return changed
+
+
 @persistent
 def _depsgraph_update_post(scene, depsgraph):
     """Propagate external pure translations through the undirected connected profile."""
@@ -235,33 +371,53 @@ def _depsgraph_update_post(scene, depsgraph):
         return
 
     parts = _component_objects()
+    profiles = _profile_objects()
+
     live_keys = {_object_key(obj) for obj in parts}
     for key in tuple(_MATRIX_CACHE):
         if key not in live_keys:
             _MATRIX_CACHE.pop(key, None)
+
+    live_profile_keys = {_object_key(obj) for obj in profiles}
+    for key in tuple(_PROFILE_MATRIX_CACHE):
+        if key not in live_profile_keys:
+            _PROFILE_MATRIX_CACHE.pop(key, None)
 
     # First encounter establishes a baseline; it must never be interpreted as a move.
     for obj in parts:
         key = _object_key(obj)
         if key not in _MATRIX_CACHE:
             _MATRIX_CACHE[key] = obj.matrix_world.copy()
+    for obj in profiles:
+        key = _object_key(obj)
+        if key not in _PROFILE_MATRIX_CACHE:
+            _PROFILE_MATRIX_CACHE[key] = obj.matrix_world.copy()
 
     updated_objects = []
+    updated_profiles = []
     seen = set()
     try:
         for update in depsgraph.updates:
             obj = _updated_original_object(update)
-            if not _eligible(obj):
+            if not (_eligible(obj) or _profile_eligible(obj)):
                 continue
             key = _object_key(obj)
             if key in seen:
                 continue
             seen.add(key)
-            updated_objects.append(obj)
+            if _profile_eligible(obj):
+                updated_profiles.append(obj)
+            else:
+                updated_objects.append(obj)
     except Exception:
         updated_objects = []
+        updated_profiles = []
+
+    profile_changed = _route_profile_transforms(scene, updated_profiles)
 
     if not updated_objects:
+        if profile_changed:
+            _tag_redraw()
         return
 
     # Classify all changed transforms against the same pre-update cache before
@@ -372,6 +528,7 @@ def register():
     # Missing baselines are established lazily by the depsgraph handler, while
     # load_post primes the cache once ordinary file data is available.
     _MATRIX_CACHE.clear()
+    _PROFILE_MATRIX_CACHE.clear()
 
 
 def unregister():
@@ -380,3 +537,4 @@ def unregister():
     if _load_post in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(_load_post)
     _MATRIX_CACHE.clear()
+    _PROFILE_MATRIX_CACHE.clear()
