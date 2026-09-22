@@ -14,9 +14,12 @@ moves the complete connected construction rigidly.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import uuid
 import bpy
 from mathutils import Vector
+
+from . import endpoint_reconnect, library
 
 
 _START_KEY = "cpc_start_junction_id"
@@ -45,6 +48,23 @@ def _endpoint(endpoint_index):
 
 def _component_id(obj):
     return str(obj.get("cpc_component_id", "") or "").strip() if obj else ""
+
+
+def reconnect_eligible(obj):
+    return bool(
+        obj
+        and getattr(obj, "type", "") == "CURVE"
+        and obj.get("cpc_part")
+        and obj.get("cpc_parametric")
+        and not obj.get("cpc_preview")
+    )
+
+
+def choose_reconnect_candidates(active_parts, selected_parts):
+    active = [obj for obj in active_parts if reconnect_eligible(obj)]
+    if active:
+        return active
+    return [obj for obj in selected_parts if reconnect_eligible(obj)]
 
 
 def endpoint_id(obj, endpoint_index) -> str:
@@ -139,6 +159,82 @@ def clear_object(obj):
 
 def new_id() -> str:
     return f"junction-{uuid.uuid4()}"
+
+
+@dataclass(frozen=True)
+class ReconnectStats:
+    clusters: int = 0
+    endpoints: int = 0
+    new_ids: int = 0
+    merged_ids: int = 0
+
+
+def _reconnect_object_key(obj):
+    component_id = _component_id(obj)
+    if component_id:
+        return component_id
+    name = str(getattr(obj, "name", "") or "Object")
+    try:
+        pointer = int(obj.as_pointer())
+    except Exception:
+        pointer = id(obj)
+    return f"{name}:{pointer}"
+
+
+def _endpoint_records(objects):
+    records = []
+    for obj in sorted(
+        objects,
+        key=lambda item: (
+            int(item.get("cpc_seq", 0)),
+            _reconnect_object_key(item),
+        ),
+    ):
+        object_key = _reconnect_object_key(obj)
+        sequence = int(obj.get("cpc_seq", 0))
+        for endpoint_index in (0, 1):
+            position = library.object_endpoint_world(obj, endpoint_index)
+            records.append(
+                endpoint_reconnect.EndpointRecord(
+                    object_key=object_key,
+                    endpoint_index=endpoint_index,
+                    position=tuple(float(position[axis]) for axis in range(3)),
+                    junction_id=endpoint_id(obj, endpoint_index),
+                    sequence=sequence,
+                )
+            )
+    return tuple(records)
+
+
+def reconnect_touching_endpoints(objects, tolerance):
+    unique = {}
+    for obj in objects or ():
+        unique.setdefault(_reconnect_object_key(obj), obj)
+    objects = list(unique.values())
+    by_key = {_reconnect_object_key(obj): obj for obj in objects}
+    records = _endpoint_records(objects)
+    groups = endpoint_reconnect.plan_reconnections(records, tolerance)
+
+    new_count = 0
+    merged_count = 0
+    endpoint_count = 0
+    for group in groups:
+        junction_id = group.keep_id
+        if not junction_id:
+            junction_id = new_id()
+            new_count += 1
+        merged_count += len(group.merged_ids)
+        for member in group.members:
+            obj = by_key[member.object_key]
+            clear_hosted_attachment(obj, member.endpoint_index)
+            set_endpoint_id(obj, member.endpoint_index, junction_id)
+            endpoint_count += 1
+    return ReconnectStats(
+        clusters=len(groups),
+        endpoints=endpoint_count,
+        new_ids=new_count,
+        merged_ids=merged_count,
+    )
 
 
 def component_objects():

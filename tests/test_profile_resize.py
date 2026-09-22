@@ -106,6 +106,41 @@ class ProfileResizeGestureTests(unittest.TestCase):
         with self.assertRaises(profile_transforms.ProfileTransformError):
             self.accepted_factor("-", 1.0)
 
+    def test_absolute_overlay_rotation_changes_only_rotation(self):
+        original = self._placement()
+
+        result = profile_transforms.resolve_profile_semantic_field(
+            original, "profile_rotation", -1.25
+        )
+
+        self.assertEqual(result["rotation"], -1.25)
+        self.assertEqual(result["uniform_scale"], original["uniform_scale"])
+        self.assertEqual(result["offset_x"], original["offset_x"])
+        self.assertEqual(original, self._placement())
+
+    def test_absolute_overlay_uniform_scale_changes_only_scale(self):
+        original = self._placement()
+
+        result = profile_transforms.resolve_profile_semantic_field(
+            original, "profile_uniform_scale", 0.375
+        )
+
+        self.assertEqual(result["uniform_scale"], 0.375)
+        self.assertEqual(result["rotation"], original["rotation"])
+        self.assertEqual(original, self._placement())
+
+    def test_absolute_overlay_uniform_scale_rejects_non_positive_value(self):
+        with self.assertRaises(profile_transforms.ProfileTransformError):
+            profile_transforms.resolve_profile_semantic_field(
+                self._placement(), "profile_uniform_scale", 0.0
+            )
+
+    def test_absolute_overlay_rejects_unknown_field(self):
+        with self.assertRaises(profile_transforms.ProfileTransformError):
+            profile_transforms.resolve_profile_semantic_field(
+                self._placement(), "not_a_field", 1.0
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

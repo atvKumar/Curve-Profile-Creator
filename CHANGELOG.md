@@ -1,5 +1,17 @@
 # Curve Profile Creator — Changelog
 
+## 0.4.4 — Transform and Connectivity
+
+- Adds one canonical complete-profile placement state for Offset X/Y, Rotation, Flip X/Y and Uniform Scale, with placement-time/post-placement equivalence.
+- Routes semantic Blender G/R/S gestures through CPC placement or construction dimensions instead of leaving native transforms as a second authority.
+- Adds component wheel/S/panel/HUD Size gestures with Shift fine sensitivity, Ctrl snapping, Shift+Ctrl fine snapping, exact typed values, and Object Scale normalization.
+- Adds committed-profile HUD Rotation and Uniform Scale controls using the canonical placement setter.
+- Adds explicit **Reconnect Touching Endpoints**, scoped to the active build/edit session or selected eligible parts and limited to metadata writes.
+- Retains persistent custom User Profile library paths and immediate `cpc_library.json` initialization for new library roots.
+- Makes 2D Sweep Caps and Fill Mode authoritative and live; 3D paths retain Blender's supported cap behavior.
+- Preserves `.cpcprofile` format v1, recipe schema 11+, transform schema 1, PARAMETRIC/STATIC compatibility, packed restoration, profile normalization and Sweep bevel linkage.
+- Release archives exclude tests, planning documents, bytecode, Git metadata and nested ZIP files.
+
 ## 0.4.3 — User Profile Library Classification and Indexed Browsing
 
 - Adds user-managed **Category** filtering above the existing User Profile dropdown/thumbnail selector.
@@ -11,7 +23,7 @@
 - Adds **Edit Info** for metadata-only updates without changing geometry, recipe, matrices, preset ID, or preview geometry.
 - Separates the library metadata index from preview loading so only the current filtered result set loads PNG icons.
 - Existing 0.4.0–0.4.2 presets remain valid and appear under `Uncategorized` until classified.
-- Keeps PNG thumbnail generation in 0.4.3; WebP is reserved for 0.4.4.
+- Keeps PNG thumbnail generation; WebP preview storage remains a later candidate.
 - **Edit Active Profile** now prefers the directly selected committed CPC profile and synchronizes the Active Profile pointer automatically.
 - Starting profile editing now activates viewport draw handlers lazily when Viewport Guides is enabled, so reopened `.blend` files do not require cycling the toggle off/on.
 - No intended modelling, transform, connectivity, Commit/Recommit, or sweep behavior changes.

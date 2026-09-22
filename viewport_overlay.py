@@ -126,7 +126,7 @@ def begin_dimension_edit(owner, obj, context, *, mouse_region=(0.0, 0.0), area_p
     region = getattr(context, "region", None)
     _STATE.active = True
     _STATE.owner = str(owner or "")
-    _STATE.title = "Viewport Dimension Edit"
+    _STATE.title = "Viewport Semantic Edit"
     _STATE.mode = "DIMENSION_EDIT"
     _STATE.active_field = ""
     _STATE.hover_field = ""
@@ -268,13 +268,9 @@ def hit_test_dimension(context, x, y, *, area_ptr=0, region_ptr=0):
     return ""
 
 
-def _selected_cpc_part(context):
+def _selected_semantic_target(context):
     obj = getattr(context, "object", None)
-    if not obj or obj.type != 'CURVE':
-        return None
-    if not obj.get("cpc_part") or not obj.get("cpc_parametric") or obj.get("cpc_preview"):
-        return None
-    return obj
+    return obj if viewport_semantics.target_kind(obj) else None
 
 
 def _part_title(obj):
@@ -291,6 +287,18 @@ def _part_meta_line(obj):
     anchor_index = int(obj.get("cpc_anchor_index", 0))
     rotation = math.degrees(float(getattr(obj, "cpc_part_rotation", 0.0)))
     return f"{'End' if anchor_index else 'Start'} Edit Anchor • Rotation {rotation:.1f}°"
+
+
+def _semantic_title(obj):
+    if viewport_semantics.target_kind(obj) == "PROFILE":
+        return str(getattr(obj, "name", "") or "Committed Profile")
+    return _part_title(obj)
+
+
+def _semantic_meta_line(obj):
+    if viewport_semantics.target_kind(obj) == "PROFILE":
+        return "Committed Profile Placement"
+    return _part_meta_line(obj)
 
 
 def _draw_points(coords, color, size):
@@ -358,8 +366,12 @@ def _draw_3d():
         gpu.state.depth_test_set('NONE')
 
         modal_here = _modal_active_here(context)
-        selected = _selected_cpc_part(context)
-        show_selected = selected and (not modal_here or _STATE.mode == "DIMENSION_EDIT")
+        selected = _selected_semantic_target(context)
+        show_selected = (
+            selected
+            and viewport_semantics.target_kind(selected) == "COMPONENT"
+            and (not modal_here or _STATE.mode == "DIMENSION_EDIT")
+        )
         if show_selected:
             start = library.object_endpoint_world(selected, 0)
             end = library.object_endpoint_world(selected, 1)
@@ -430,9 +442,20 @@ def _selected_hud_position(context, obj):
     rv3d = getattr(getattr(context, "space_data", None), "region_3d", None)
     if not region or not rv3d:
         return None
-    start = library.object_endpoint_world(obj, 0)
-    end = library.object_endpoint_world(obj, 1)
-    mid = (start + end) * 0.5
+    if viewport_semantics.target_kind(obj) == "COMPONENT":
+        start = library.object_endpoint_world(obj, 0)
+        end = library.object_endpoint_world(obj, 1)
+        mid = (start + end) * 0.5
+    else:
+        bounds = getattr(obj, "bound_box", None)
+        if bounds:
+            points = [obj.matrix_world @ Vector(corner) for corner in bounds]
+            mid = points[0].copy()
+            for point in points[1:]:
+                mid += point
+            mid /= len(points)
+        else:
+            mid = obj.matrix_world.translation.copy()
     screen = view3d_utils.location_3d_to_region_2d(region, rv3d, mid, default=None)
     if screen is None:
         return None
@@ -450,10 +473,10 @@ def _draw_selected_semantic_hud(context, obj, x, y):
     line_h = 19.0
     _font_setup(font_id, base_size)
 
-    title = _part_title(obj)
+    title = _semantic_title(obj)
     if edit_active:
-        title = f"Viewport Edit • {title}"
-    lines_before = [title, _part_meta_line(obj)]
+        title = f"Viewport Semantic Edit • {title}"
+    lines_before = [title, _semantic_meta_line(obj)]
     cursor_y = float(y)
 
     for index, text in enumerate(lines_before):
@@ -467,10 +490,14 @@ def _draw_selected_semantic_hud(context, obj, x, y):
         is_active = edit_active and field.field_id == _STATE.active_field
         is_hover = edit_active and field.field_id == _STATE.hover_field and field.editable
         if is_active:
-            value_text = format_length(context, field.value) if _STATE.scrub_active else ((_STATE.input_text or "") + "▌")
+            value_text = (
+                (_STATE.input_text or viewport_semantics.format_field_value(context, field))
+                if _STATE.scrub_active
+                else ((_STATE.input_text or "") + "▌")
+            )
             color = _COLOR_ACTIVE
         else:
-            value_text = format_length(context, field.value)
+            value_text = viewport_semantics.format_field_value(context, field)
             color = _COLOR_HOVER if is_hover else (_COLOR_TEXT if field.editable else _COLOR_MUTED)
 
         prefix = "› " if is_hover or is_active else "  "
@@ -494,7 +521,9 @@ def _draw_selected_semantic_hud(context, obj, x, y):
 
     if edit_active:
         cursor_y -= 2.0
-        instruction = "Drag value to scrub • Click to type • L/W/H/D/F • Tab anchor • Esc exit"
+        instruction = "Drag value • Click to type • Shift fine • Ctrl snap • Esc exit"
+        if viewport_semantics.target_kind(obj) == "COMPONENT":
+            instruction += " • L/W/H/D/F • Tab anchor"
         blf.color(font_id, *_COLOR_MUTED)
         blf.position(font_id, float(x), cursor_y, 0)
         blf.draw(font_id, instruction)
@@ -535,7 +564,7 @@ def _draw_2d():
             _draw_text_block(x, y, lines)
             return
 
-        selected = _selected_cpc_part(context)
+        selected = _selected_semantic_target(context)
         if not selected:
             _DIM_HIT_RECTS.pop(_view_key(context), None)
             return

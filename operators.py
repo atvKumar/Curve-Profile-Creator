@@ -7,7 +7,7 @@ from bpy.props import EnumProperty, IntProperty, StringProperty
 from mathutils import Matrix, Vector, geometry as mu_geometry
 from bpy_extras import view3d_utils
 
-from . import architectural_components, architectural_recipes, compound_geometry, connected_transforms, geometry, interaction_units, junctions, library, placement_parameters, primitives, profile_presets, profile_transforms, properties, primitive_geometry, user_profiles, viewport_overlay, viewport_semantics
+from . import architectural_components, architectural_recipes, compound_geometry, connected_transforms, geometry, interaction_units, junctions, library, placement_parameters, primitives, profile_presets, profile_transforms, properties, primitive_geometry, semantic_gestures, user_profiles, viewport_overlay, viewport_semantics
 from . import EXTENSION_VERSION
 
 
@@ -60,6 +60,13 @@ def _active_builder_parts(scene, settings, include_preview=False):
         )
 
     return []
+
+
+def _reconnect_candidates(context):
+    settings = _settings(context)
+    active_parts = _active_builder_parts(context.scene, settings)
+    selected_parts = getattr(context, "selected_objects", ()) or ()
+    return junctions.choose_reconnect_candidates(active_parts, selected_parts)
 
 
 def _ensure_build_session(context):
@@ -1520,8 +1527,8 @@ class CPC_OT_PlaceArchitecturalComponent(Operator):
 
 class CPC_OT_ViewportDimensionEdit(Operator):
     bl_idname = "cpc.viewport_dimension_edit"
-    bl_label = "Edit Dimensions in Viewport"
-    bl_description = "Drag CPC semantic values to scrub them live, or click and type exact Scene, Metric or Architectural Imperial values"
+    bl_label = "Edit Semantics in Viewport"
+    bl_description = "Edit CPC Rotation, Size and dimensions from one semantic viewport surface"
     bl_options = {'REGISTER', 'UNDO'}
 
     _target = None
@@ -1537,15 +1544,16 @@ class CPC_OT_ViewportDimensionEdit(Operator):
     _pointer_start_y = 0.0
     _scrub_field = ""
     _scrub_start_value = 0.0
-    _scrub_last_x = 0.0
+    _scrub_current_value = 0.0
+    _scrub_state = None
+    _active_state = None
 
     @classmethod
     def poll(cls, context):
         obj = getattr(context, "object", None)
         return bool(
             context.mode == 'OBJECT'
-            and obj and obj.type == 'CURVE' and obj.get("cpc_part")
-            and obj.get("cpc_parametric") and not obj.get("cpc_preview")
+            and viewport_semantics.target_kind(obj)
         )
 
     def _mouse_region(self, event):
@@ -1564,12 +1572,12 @@ class CPC_OT_ViewportDimensionEdit(Operator):
         except Exception:
             return False
         current = getattr(context, "object", None)
-        return current is obj and obj.type == 'CURVE' and obj.get("cpc_part") and not obj.get("cpc_preview")
+        return current is obj and bool(viewport_semantics.target_kind(obj))
 
     def _set_status(self, context):
         unit_mode = str(getattr(_settings(context), "viewport_unit_mode", "SCENE"))
         context.workspace.status_text_set(
-            f"CPC Viewport Edit [{unit_mode.title()}] | Drag value: scrub • Click value: type • L/W/H/D/F • Shift: fine • Esc exit"
+            f"CPC Semantic Edit [{unit_mode.title()}] | Drag or type a value • Shift fine • Ctrl snap • Shift+Ctrl fine snap • Esc exit"
         )
 
     def _clear_pointer_gesture(self):
@@ -1578,7 +1586,8 @@ class CPC_OT_ViewportDimensionEdit(Operator):
         self._pointer_start_y = 0.0
         self._scrub_field = ""
         self._scrub_start_value = 0.0
-        self._scrub_last_x = 0.0
+        self._scrub_current_value = 0.0
+        self._scrub_state = None
 
     def _begin_pointer_field(self, field, mouse_region):
         if not field or not field.editable:
@@ -1600,16 +1609,34 @@ class CPC_OT_ViewportDimensionEdit(Operator):
     def _begin_scrub(self, context, field, mouse_region):
         if not field or not field.editable:
             return False
+        try:
+            state = viewport_semantics.capture_edit_state(self._target, field.field_id)
+        except Exception as exc:
+            self._clear_pointer_gesture()
+            viewport_overlay.update_dimension_edit(
+                mouse_region=mouse_region,
+                active_field="",
+                scrub_active=False,
+                message=f"Error • {exc}",
+            )
+            return False
+        self._pending_field = ""
         self._scrub_field = str(field.field_id)
-        self._scrub_start_value = float(field.value)
-        self._scrub_last_x = self._pointer_start_x
+        self._scrub_state = state
+        self._scrub_start_value = float(state["value"])
+        self._scrub_current_value = self._scrub_start_value
+        shown = viewport_semantics.format_field_value(
+            context,
+            field,
+            value=self._scrub_start_value,
+        )
         viewport_overlay.update_dimension_edit(
             mouse_region=mouse_region,
             hover_field="",
             active_field=self._scrub_field,
-            input_text="",
+            input_text=shown,
             scrub_active=True,
-            message=f"Scrub {field.label} • Shift fine • Esc/RMB cancel",
+            message=f"Scrub {field.label} • Shift fine • Ctrl snap • Esc/RMB cancel",
         )
         return True
 
@@ -1617,52 +1644,84 @@ class CPC_OT_ViewportDimensionEdit(Operator):
         field = viewport_semantics.field_by_id(self._target, self._scrub_field)
         if field is None or not field.editable:
             self._clear_pointer_gesture()
-            viewport_overlay.update_dimension_edit(active_field="", scrub_active=False, message="Dimension is no longer available")
+            viewport_overlay.update_dimension_edit(active_field="", scrub_active=False, message="Semantic field is no longer available")
             return False
         mouse_x = float(mouse_region[0])
-        dx = mouse_x - self._scrub_last_x
-        self._scrub_last_x = mouse_x
-        if abs(dx) <= 1.0e-9:
-            return True
-        sensitivity = 0.01 * (0.2 if bool(getattr(event, "shift", False)) else 1.0)
-        value = max(float(field.value) * math.exp(dx * sensitivity), 1.0e-6)
+        total_dx = mouse_x - self._pointer_start_x
+        settings = _settings(context)
         try:
-            viewport_semantics.apply_value(self._target, field.field_id, value)
+            value = viewport_semantics.resolve_scrub_value(
+                field.kind,
+                self._scrub_start_value,
+                total_dx,
+                shift=bool(getattr(event, "shift", False)),
+                ctrl=bool(getattr(event, "ctrl", False)),
+                rotation_snap_radians=math.radians(
+                    float(getattr(settings, "rotation_snap_degrees", 15.0))
+                ),
+            )
+            viewport_semantics.apply_edit_value(
+                self._target,
+                field.field_id,
+                value,
+                self._scrub_state,
+                context,
+            )
+            self._scrub_current_value = value
         except Exception as exc:
             viewport_overlay.update_dimension_edit(message=f"Error • {exc}")
             return False
         current = viewport_semantics.field_by_id(self._target, field.field_id)
-        shown = viewport_overlay.format_length(context, current.value if current else value)
+        shown = viewport_semantics.format_field_value(
+            context,
+            current or field,
+            value=value if field.kind == "RESIZE_ACTION" else None,
+        )
         viewport_overlay.update_dimension_edit(
             mouse_region=mouse_region,
             active_field=field.field_id,
+            input_text=shown,
             scrub_active=True,
-            message=f"Scrubbing • {field.label} {shown} • Shift fine",
+            message=f"Scrubbing • {field.label} {shown} • Shift fine • Ctrl snap",
         )
         viewport_overlay.tag_redraw_all(context)
         return True
 
     def _cancel_scrub(self, context, mouse_region=None):
         field_id = self._scrub_field
-        start_value = self._scrub_start_value
+        state = self._scrub_state
         field = viewport_semantics.field_by_id(self._target, field_id) if field_id else None
-        if field is not None:
+        error = ""
+        if field is not None and state:
             try:
-                viewport_semantics.apply_value(self._target, field_id, start_value)
-            except Exception:
-                pass
-        label = field.label if field else "Dimension"
+                viewport_semantics.restore_edit_state(
+                    self._target,
+                    field_id,
+                    state,
+                    context,
+                )
+            except Exception as exc:
+                error = f"Error • {exc}"
+        label = field.label if field else "Semantic field"
         self._clear_pointer_gesture()
         viewport_overlay.update_dimension_edit(
             mouse_region=mouse_region, active_field="", hover_field="", input_text="", scrub_active=False,
-            message=f"Cancelled • {label}",
+            message=error or f"Cancelled • {label}",
         )
         viewport_overlay.tag_redraw_all(context)
 
     def _finish_scrub(self, context, mouse_region=None):
         field = viewport_semantics.field_by_id(self._target, self._scrub_field) if self._scrub_field else None
-        label = field.label if field else "Dimension"
-        shown = viewport_overlay.format_length(context, field.value) if field else ""
+        label = field.label if field else "Semantic field"
+        shown = (
+            viewport_semantics.format_field_value(
+                context,
+                field,
+                value=self._scrub_current_value,
+            )
+            if field
+            else ""
+        )
         self._clear_pointer_gesture()
         viewport_overlay.update_dimension_edit(
             mouse_region=mouse_region, active_field="", hover_field="", input_text="", scrub_active=False,
@@ -1670,11 +1729,23 @@ class CPC_OT_ViewportDimensionEdit(Operator):
         )
         viewport_overlay.tag_redraw_all(context)
 
-    def _activate_field(self, field, mouse_region=None):
+    def _activate_field(self, context, field, mouse_region=None):
         if not field or not field.editable:
             return False
         self._clear_pointer_gesture()
+        try:
+            state = viewport_semantics.capture_edit_state(self._target, field.field_id)
+        except Exception as exc:
+            viewport_overlay.update_dimension_edit(
+                mouse_region=mouse_region,
+                active_field="",
+                input_text="",
+                scrub_active=False,
+                message=f"Error • {exc}",
+            )
+            return False
         self._active_field = str(field.field_id)
+        self._active_state = state
         self._input_text = ""
         viewport_overlay.update_dimension_edit(
             mouse_region=mouse_region,
@@ -1687,6 +1758,7 @@ class CPC_OT_ViewportDimensionEdit(Operator):
 
     def _cancel_field(self, mouse_region=None):
         self._active_field = ""
+        self._active_state = None
         self._input_text = ""
         viewport_overlay.update_dimension_edit(
             mouse_region=mouse_region,
@@ -1705,19 +1777,37 @@ class CPC_OT_ViewportDimensionEdit(Operator):
             viewport_overlay.update_dimension_edit(message=f"Error • Enter a value for {field.label}")
             return False
         try:
-            value = interaction_units.parse_length(
+            if field.kind == "LENGTH":
+                value = interaction_units.parse_length(
+                    context,
+                    self._input_text,
+                    reference_value=field.value,
+                )
+            elif field.kind == "ANGLE":
+                value = semantic_gestures.parse_angle_degrees(self._input_text)
+            elif field.kind in {"FACTOR", "RESIZE_ACTION"}:
+                value = semantic_gestures.parse_positive_factor(self._input_text)
+            else:
+                raise ValueError(f"Unsupported semantic field kind: {field.kind}")
+            viewport_semantics.apply_edit_value(
+                self._target,
+                field.field_id,
+                value,
+                self._active_state,
                 context,
-                self._input_text,
-                reference_value=field.value,
             )
-            viewport_semantics.apply_value(self._target, field.field_id, value)
         except Exception as exc:
             viewport_overlay.update_dimension_edit(message=f"Error • {exc}")
             return False
 
         applied = viewport_semantics.field_by_id(self._target, field.field_id)
-        shown = viewport_overlay.format_length(context, applied.value if applied else value)
+        shown = viewport_semantics.format_field_value(
+            context,
+            applied or field,
+            value=value if field.kind == "RESIZE_ACTION" else None,
+        )
         self._active_field = ""
+        self._active_state = None
         self._input_text = ""
         viewport_overlay.update_dimension_edit(
             mouse_region=mouse_region,
@@ -1733,6 +1823,7 @@ class CPC_OT_ViewportDimensionEdit(Operator):
         if self._scrub_field:
             self._cancel_scrub(context)
         self._clear_pointer_gesture()
+        self._active_state = None
         context.workspace.status_text_set(None)
         viewport_overlay.clear_modal(self._owner)
         return {'FINISHED'}
@@ -1746,16 +1837,20 @@ class CPC_OT_ViewportDimensionEdit(Operator):
             return {'FINISHED'}
 
         obj = context.object
-        if not obj:
+        kind = viewport_semantics.target_kind(obj)
+        if not kind:
             return {'CANCELLED'}
+        settings = _settings(context)
+        if kind == "PROFILE" and getattr(settings, "active_profile", None) is not obj:
+            settings.active_profile = obj
         fields = [field for field in viewport_semantics.fields_for(obj) if field.editable]
         if not fields:
-            self.report({'INFO'}, "Selected CPC part has no viewport-editable dimensions")
+            self.report({'INFO'}, "Selected CPC object has no viewport-editable semantics")
             return {'CANCELLED'}
 
         area = context.area
         if not area or area.type != 'VIEW_3D':
-            self.report({'ERROR'}, "Viewport dimension editing requires a 3D View")
+            self.report({'ERROR'}, "Viewport semantic editing requires a 3D View")
             return {'CANCELLED'}
         window_region = next((region for region in area.regions if region.type == 'WINDOW'), None)
         if window_region is None:
@@ -1769,6 +1864,7 @@ class CPC_OT_ViewportDimensionEdit(Operator):
         self._area_ptr = int(area.as_pointer())
         self._region_ptr = int(window_region.as_pointer())
         self._active_field = ""
+        self._active_state = None
         self._input_text = ""
         self._clear_pointer_gesture()
         mouse_region = self._mouse_region(event)
@@ -1781,7 +1877,7 @@ class CPC_OT_ViewportDimensionEdit(Operator):
             area_ptr=self._area_ptr,
             region_ptr=self._region_ptr,
         )
-        viewport_overlay.update_dimension_edit(message="Drag a value to scrub, or click it to type an exact value")
+        viewport_overlay.update_dimension_edit(message="Drag a semantic value, or click it to type an exact value")
         self._set_status(context)
         context.window_manager.modal_handler_add(self)
         return {'RUNNING_MODAL'}
@@ -1822,7 +1918,7 @@ class CPC_OT_ViewportDimensionEdit(Operator):
                 field = viewport_semantics.field_by_id(self._target, self._pending_field)
                 self._clear_pointer_gesture()
                 if field and field.editable:
-                    self._activate_field(field, mouse_region)
+                    self._activate_field(context, field, mouse_region)
                 return {'RUNNING_MODAL'}
             if event.value == 'PRESS' and event.type in {'ESC', 'RIGHTMOUSE'}:
                 self._clear_pointer_gesture()
@@ -1863,7 +1959,7 @@ class CPC_OT_ViewportDimensionEdit(Operator):
                         except ValueError:
                             idx = -1
                         self._cancel_field(mouse_region)
-                        self._activate_field(fields[(idx + 1) % len(fields)], mouse_region)
+                        self._activate_field(context, fields[(idx + 1) % len(fields)], mouse_region)
                     return {'RUNNING_MODAL'}
 
                 if event.type in {'L', 'W', 'H', 'D', 'F'} and not self._input_text:
@@ -1873,7 +1969,7 @@ class CPC_OT_ViewportDimensionEdit(Operator):
                         current_index = ids.index(self._active_field)
                         next_field = matches[(current_index + 1) % len(matches)]
                         self._cancel_field(mouse_region)
-                        self._activate_field(next_field, mouse_region)
+                        self._activate_field(context, next_field, mouse_region)
                         return {'RUNNING_MODAL'}
 
                 char = str(getattr(event, "unicode", "") or "")
@@ -1914,7 +2010,10 @@ class CPC_OT_ViewportDimensionEdit(Operator):
             if event.type in {'ESC', 'RIGHTMOUSE'}:
                 return self._finish(context)
 
-            if event.type == 'TAB':
+            if (
+                event.type == 'TAB'
+                and viewport_semantics.target_kind(self._target) == "COMPONENT"
+            ):
                 current = 1 if int(self._target.get("cpc_anchor_index", 0)) else 0
                 _set_part_edit_anchor(self._target, 1 - current)
                 anchor_name = "End" if int(self._target.get("cpc_anchor_index", 0)) else "Start"
@@ -1943,7 +2042,7 @@ class CPC_OT_ViewportDimensionEdit(Operator):
             if event.type in {'L', 'W', 'H', 'D', 'F'}:
                 field = viewport_semantics.shortcut_field(self._target, event.type)
                 if field:
-                    self._activate_field(field, mouse_region)
+                    self._activate_field(context, field, mouse_region)
                     return {'RUNNING_MODAL'}
 
         return {'PASS_THROUGH'}
@@ -2011,6 +2110,41 @@ class CPC_OT_AdjustPartRotation(Operator):
         else:
             step = math.radians(max(1.0, float(_settings(context).rotation_snap_degrees)))
             obj.cpc_part_rotation += -step if self.action == 'NEGATIVE' else step
+        return {'FINISHED'}
+
+
+class CPC_OT_ReconnectTouchingEndpoints(Operator):
+    bl_idname = "cpc.reconnect_touching_endpoints"
+    bl_label = "Reconnect Touching Endpoints"
+    bl_description = "Rebuild CPC endpoint junctions for physically touching parts without moving geometry"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return len(_reconnect_candidates(context)) >= 2
+
+    def execute(self, context):
+        settings = _settings(context)
+        candidates = _reconnect_candidates(context)
+        if len(candidates) < 2:
+            self.report({'INFO'}, "Select at least two eligible CPC parts")
+            return {'CANCELLED'}
+        try:
+            stats = junctions.reconnect_touching_endpoints(
+                candidates,
+                float(settings.merge_tolerance),
+            )
+        except (TypeError, ValueError) as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        if not stats.clusters:
+            self.report({'INFO'}, "No touching CPC endpoints found")
+            return {'CANCELLED'}
+        self.report(
+            {'INFO'},
+            f"Reconnected {stats.endpoints} endpoints in {stats.clusters} junctions "
+            f"({stats.new_ids} new, {stats.merged_ids} merged)",
+        )
         return {'FINISHED'}
 
 
@@ -2809,18 +2943,17 @@ class CPC_OT_ComponentResize(Operator):
 
     def _apply_factor(self, context, factor):
         factor = max(float(factor), 0.001)
-        if not viewport_semantics.apply_uniform_resize_state(
+        if not viewport_semantics.apply_edit_value(
             self._target,
-            self._state,
+            "part_size",
             factor,
+            self._state,
             context,
-            preserve_anchor=True,
-            propagate_connected=True,
         ):
             return False
         self._factor = factor
         context.workspace.status_text_set(
-            f"CPC Size {factor:.4f}× | Mouse scale • Type factor • Shift fine • Enter/LMB accept • Esc/RMB cancel"
+            f"CPC Size {factor:.4f}× | Mouse scale • Type factor • Shift fine • Ctrl snap • Shift+Ctrl fine snap • Enter/LMB accept • Esc/RMB cancel"
         )
         if context.area:
             context.area.tag_redraw()
@@ -2831,9 +2964,10 @@ class CPC_OT_ComponentResize(Operator):
         if not obj:
             return {'CANCELLED'}
 
-        state = viewport_semantics.capture_uniform_resize_state(obj)
-        if not state:
-            self.report({'ERROR'}, "Could not read CPC construction dimensions")
+        try:
+            state = viewport_semantics.capture_edit_state(obj, "part_size")
+        except Exception as exc:
+            self.report({'ERROR'}, f"Could not start CPC Size: {exc}")
             return {'CANCELLED'}
 
         self._target = obj
@@ -2842,12 +2976,16 @@ class CPC_OT_ComponentResize(Operator):
         self._factor = 1.0
         self._start_mouse_x = float(event.mouse_region_x)
 
-        pivot = view3d_utils.location_3d_to_region_2d(
-            context.region,
-            context.space_data.region_3d,
-            obj.matrix_world.translation,
-            default=None,
-        )
+        region = getattr(context, "region", None)
+        rv3d = getattr(getattr(context, "space_data", None), "region_3d", None)
+        pivot = None
+        if region and getattr(region, "type", "") == 'WINDOW' and rv3d:
+            pivot = view3d_utils.location_3d_to_region_2d(
+                region,
+                rv3d,
+                obj.matrix_world.translation,
+                default=None,
+            )
         self._pivot_region = pivot.copy() if pivot is not None else None
         if self._pivot_region is not None:
             mouse = Vector((event.mouse_region_x, event.mouse_region_y))
@@ -2856,7 +2994,7 @@ class CPC_OT_ComponentResize(Operator):
             self._start_distance = 1.0
 
         context.workspace.status_text_set(
-            "CPC Size 1.0000× | Mouse scale • Type factor • Shift fine • Enter/LMB accept • Esc/RMB cancel"
+            "CPC Size 1.0000× | Mouse scale • Type factor • Shift fine • Ctrl snap • Shift+Ctrl fine snap • Enter/LMB accept • Esc/RMB cancel"
         )
         context.window_manager.modal_handler_add(self)
         return {'RUNNING_MODAL'}
@@ -2868,13 +3006,22 @@ class CPC_OT_ComponentResize(Operator):
                 raw = max((mouse - self._pivot_region).length / self._start_distance, 0.001)
             else:
                 raw = max(math.exp((float(event.mouse_region_x) - self._start_mouse_x) * 0.005), 0.001)
-            factor = 1.0 + (raw - 1.0) * (0.1 if event.shift else 1.0)
+            factor = semantic_gestures.resize_factor(
+                raw,
+                shift=bool(event.shift),
+                ctrl=bool(event.ctrl),
+            )
             self._apply_factor(context, factor)
             return {'RUNNING_MODAL'}
 
         if event.value == 'PRESS':
             if event.type in {'ESC', 'RIGHTMOUSE'}:
-                self._apply_factor(context, 1.0)
+                viewport_semantics.restore_edit_state(
+                    self._target,
+                    "part_size",
+                    self._state,
+                    context,
+                )
                 context.workspace.status_text_set(None)
                 return {'CANCELLED'}
 
@@ -2927,8 +3074,6 @@ class CPC_OT_ComponentRotate(Operator):
     _target = None
     _start_rotation = 0.0
     _start_mouse_x = 0.0
-    _last_mouse_x = 0.0
-    _raw_delta = 0.0
     _numeric = ""
 
     @classmethod
@@ -2941,11 +3086,19 @@ class CPC_OT_ComponentRotate(Operator):
         )
 
     def _apply_delta(self, context, delta):
-        target = self._start_rotation + float(delta)
+        target = semantic_gestures.rotation_target(
+            self._start_rotation,
+            delta=delta,
+        )
+        self._apply_target(context, target)
+
+    def _apply_target(self, context, target):
+        target = float(target)
         self._target.cpc_part_rotation = target
+        delta = target - self._start_rotation
         context.workspace.status_text_set(
             f"CPC Part Rotation Δ {math.degrees(delta):.2f}° "
-            f"(Total {math.degrees(target):.2f}°) | Ctrl snap • Shift fine • Type angle • Enter/LMB accept • Esc/RMB cancel"
+            f"(Total {math.degrees(target):.2f}°) | Shift fine • Ctrl snap • Shift+Ctrl fine snap • Type angle • Enter/LMB accept • Esc/RMB cancel"
         )
         if context.area:
             context.area.tag_redraw()
@@ -2957,26 +3110,25 @@ class CPC_OT_ComponentRotate(Operator):
         self._target = obj
         self._start_rotation = float(getattr(obj, "cpc_part_rotation", 0.0))
         self._start_mouse_x = float(event.mouse_region_x)
-        self._last_mouse_x = float(event.mouse_region_x)
-        self._raw_delta = 0.0
         self._numeric = ""
         context.workspace.status_text_set(
             f"CPC Part Rotation 0.00° (Total {math.degrees(self._start_rotation):.2f}°) | "
-            "Ctrl snap • Shift fine • Type angle • Enter/LMB accept • Esc/RMB cancel"
+            "Shift fine • Ctrl snap • Shift+Ctrl fine snap • Type angle • Enter/LMB accept • Esc/RMB cancel"
         )
         context.window_manager.modal_handler_add(self)
         return {'RUNNING_MODAL'}
 
     def modal(self, context, event):
         if event.type == 'MOUSEMOVE' and not self._numeric:
-            dx = float(event.mouse_region_x) - self._last_mouse_x
-            self._last_mouse_x = float(event.mouse_region_x)
-            sensitivity = 0.005 * (0.2 if event.shift else 1.0)
-            self._raw_delta += dx * sensitivity
-            delta = self._raw_delta
-            if event.ctrl:
-                snap = math.radians(max(1.0, float(_settings(context).rotation_snap_degrees)))
-                delta = round(delta / snap) * snap
+            raw_delta = (float(event.mouse_region_x) - self._start_mouse_x) * 0.005
+            delta = semantic_gestures.rotation_delta(
+                raw_delta,
+                shift=bool(event.shift),
+                ctrl=bool(event.ctrl),
+                snap_radians=math.radians(
+                    float(_settings(context).rotation_snap_degrees)
+                ),
+            )
             self._apply_delta(context, delta)
             return {'RUNNING_MODAL'}
 
@@ -2989,7 +3141,13 @@ class CPC_OT_ComponentRotate(Operator):
             if event.type in {'LEFTMOUSE', 'RET', 'NUMPAD_ENTER'}:
                 if self._numeric and self._numeric not in {'-', '.', '-.'}:
                     try:
-                        self._apply_delta(context, math.radians(float(self._numeric)))
+                        self._apply_target(
+                            context,
+                            semantic_gestures.rotation_target(
+                                self._start_rotation,
+                                typed_degrees=self._numeric,
+                            ),
+                        )
                     except ValueError:
                         pass
                 context.workspace.status_text_set(None)
@@ -2999,7 +3157,13 @@ class CPC_OT_ComponentRotate(Operator):
                 self._numeric = self._numeric[:-1]
                 if self._numeric and self._numeric not in {'-', '.', '-.'}:
                     try:
-                        self._apply_delta(context, math.radians(float(self._numeric)))
+                        self._apply_target(
+                            context,
+                            semantic_gestures.rotation_target(
+                                self._start_rotation,
+                                typed_degrees=self._numeric,
+                            ),
+                        )
                     except ValueError:
                         pass
                 else:
@@ -3015,7 +3179,13 @@ class CPC_OT_ComponentRotate(Operator):
                 self._numeric += char
                 if self._numeric not in {'-', '.', '-.'}:
                     try:
-                        self._apply_delta(context, math.radians(float(self._numeric)))
+                        self._apply_target(
+                            context,
+                            semantic_gestures.rotation_target(
+                                self._start_rotation,
+                                typed_degrees=self._numeric,
+                            ),
+                        )
                     except ValueError:
                         pass
                 return {'RUNNING_MODAL'}
@@ -3067,7 +3237,7 @@ class CPC_OT_ProfileResize(Operator):
         total = float(self._start_state["uniform_scale"]) * float(self._factor)
         context.workspace.status_text_set(
             f"CPC Profile Size {self._factor:.4f}× | Uniform Scale {total:.4f} | "
-            "Mouse scale • Type factor • Shift fine • Enter/LMB accept • Esc/RMB cancel"
+            "Mouse scale • Type factor • Shift fine • Ctrl snap • Shift+Ctrl fine snap • Enter/LMB accept • Esc/RMB cancel"
         )
 
     def _apply_factor(self, context, factor):
@@ -3154,12 +3324,16 @@ class CPC_OT_ProfileResize(Operator):
         self._did_apply = False
         self._start_mouse_x = float(event.mouse_region_x)
 
-        pivot = view3d_utils.location_3d_to_region_2d(
-            context.region,
-            context.space_data.region_3d,
-            profile.matrix_world.translation,
-            default=None,
-        )
+        region = getattr(context, "region", None)
+        rv3d = getattr(getattr(context, "space_data", None), "region_3d", None)
+        pivot = None
+        if region and getattr(region, "type", "") == 'WINDOW' and rv3d:
+            pivot = view3d_utils.location_3d_to_region_2d(
+                region,
+                rv3d,
+                profile.matrix_world.translation,
+                default=None,
+            )
         self._pivot_region = pivot.copy() if pivot is not None else None
         if self._pivot_region is not None:
             mouse = Vector((event.mouse_region_x, event.mouse_region_y))
@@ -3178,7 +3352,11 @@ class CPC_OT_ProfileResize(Operator):
                 raw = max((mouse - self._pivot_region).length / self._start_distance, 0.001)
             else:
                 raw = max(math.exp((float(event.mouse_region_x) - self._start_mouse_x) * 0.005), 0.001)
-            factor = 1.0 + (raw - 1.0) * (0.1 if event.shift else 1.0)
+            factor = semantic_gestures.resize_factor(
+                raw,
+                shift=bool(event.shift),
+                ctrl=bool(event.ctrl),
+            )
             self._apply_factor(context, factor)
             return {'RUNNING_MODAL'}
 
@@ -3398,6 +3576,7 @@ _CLASSES = (
     CPC_OT_ViewportDimensionEdit,
     CPC_OT_SetEditAnchor,
     CPC_OT_AdjustPartRotation,
+    CPC_OT_ReconnectTouchingEndpoints,
     CPC_OT_DeleteLastPart,
     CPC_OT_ClearParts,
     CPC_OT_CommitProfile,

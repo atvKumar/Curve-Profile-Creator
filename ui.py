@@ -351,9 +351,9 @@ class CPC_PT_Main(Panel):
         # One interaction surface for semantic viewport dimensions + units.
         row = selected_box.row(align=True)
         if viewport_overlay.dimension_edit_active():
-            row.operator("cpc.viewport_dimension_edit", text="Viewport Edit Active (E)", icon='CHECKMARK')
+            row.operator("cpc.viewport_dimension_edit", text="Viewport Semantic Edit Active (E)", icon='CHECKMARK')
         else:
-            row.operator("cpc.viewport_dimension_edit", text="Edit Dimensions in Viewport (E)", icon='EDITMODE_HLT')
+            row.operator("cpc.viewport_dimension_edit", text="Edit Semantics in Viewport (E)", icon='EDITMODE_HLT')
         row.prop(settings, "viewport_unit_mode", text="")
         if settings.viewport_unit_mode == 'ARCH':
             row.prop(settings, "imperial_fraction_denominator", text="")
@@ -374,6 +374,9 @@ class CPC_PT_Main(Panel):
         )
         op.anchor = 1
 
+        gesture_row = selected_box.row(align=True)
+        gesture_row.operator("cpc.component_rotate", text="Rotate")
+        gesture_row.operator("cpc.component_resize", text="Size")
         selected_box.prop(selected, "cpc_part_rotation", text="Rotation")
         snap = float(settings.rotation_snap_degrees)
         row = selected_box.row(align=True)
@@ -408,6 +411,11 @@ class CPC_PT_Main(Panel):
                 note.label(text="Packed regeneration • selected Edit Anchor respected")
 
         selected_box.prop(settings, "maintain_connected_parts", text="Maintain Connected Parts")
+        selected_box.operator(
+            "cpc.reconnect_touching_endpoints",
+            text="Reconnect Touching Endpoints",
+            icon='AUTOMERGE_ON',
+        )
 
     def _draw_build(self, layout, context, settings):
         box = layout.box()
@@ -455,6 +463,11 @@ class CPC_PT_Main(Panel):
             row = advanced.row(align=True)
             row.operator("cpc.show_parts", text="Show Parts", icon='HIDE_OFF')
             row.operator("cpc.use_selected_profile", text="Use Selected Profile", icon='EYEDROPPER')
+            advanced.operator(
+                "cpc.reconnect_touching_endpoints",
+                text="Reconnect Touching Endpoints",
+                icon='AUTOMERGE_ON',
+            )
 
     def _draw_user_profiles(self, layout, context, settings):
         box = layout.box()

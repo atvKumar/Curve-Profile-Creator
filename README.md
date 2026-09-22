@@ -1,22 +1,21 @@
-# Curve Profile Creator — 0.4.3
+# Curve Profile Creator — 0.4.4
 
 Curve Profile Creator (CPC) is a Blender Extension for constructing, editing, committing, reusing and sweeping parametric architectural profile curves.
 
 **Minimum supported CPC persistence baseline: 0.4.0 / recipe schema 11+.** The validated 0.4.1 modelling behavior remains the protected runtime baseline.
 
-## What 0.4.3 changes
+## What 0.4.4 changes
 
-0.4.3 makes the User Profiles library practical for larger collections without changing CPC geometry, recipe or sweep semantics.
+0.4.4 closes the transform and connectivity milestone while retaining the persistent User Profiles library introduced in 0.4.3.
 
-- adds **user-managed Categories** above the existing preset selector;
-- ships starter architectural categories, but they are not a closed enum;
-- adds **[ + ]** to create categories and **Manage** to rename the selected real category;
-- stores persistent category vocabulary in optional `cpc_library.json` library configuration;
-- adds **global Search across all categories**;
-- adds optional **Tags** and **Source** metadata to `.cpcprofile` files;
-- adds **Edit Info** to change display/classification/source metadata without changing geometry, recipe, preset ID or thumbnail;
-- separates the in-memory metadata index from preview loading;
-- loads PNG preview icons only for the current category or global-search result set;
+- stores one canonical complete-profile placement state: Offset X/Y, Rotation, Flip X/Y and Uniform Scale;
+- makes placement-time and post-placement transforms resolve to the same result;
+- routes Blender G/R/S through CPC semantic placement or component dimensions;
+- adds component wheel/S/panel/HUD **Size** gestures that regenerate dimensions and leave Object Scale at `1,1,1`;
+- adds committed-profile HUD **Rotation** and **Uniform Scale** controls;
+- adds explicit **Reconnect Touching Endpoints** for metadata-only endpoint junction repair;
+- keeps custom User Profile library paths persistent and initializes `cpc_library.json` immediately for a new library;
+- makes 2D Sweep Caps/Fill Mode authoritative and live, while retaining the existing 3D sweep behavior;
 - keeps `.cpcprofile` format v1, recipe schema 11+, transform schema 1 and PNG thumbnails unchanged.
 
 ## User Profiles browser
@@ -48,11 +47,11 @@ CPC supplies these starter categories for an unconfigured library:
 - Cabinet / Furniture Mouldings
 - Other
 
-Users may add or rename real categories. `All Categories` is a virtual filter item. `Uncategorized` is the virtual fallback for existing presets without category metadata. Neither is renameable. Category merge/delete is intentionally not part of 0.4.3.
+Users may add or rename real categories. `All Categories` is a virtual filter item. `Uncategorized` is the virtual fallback for existing presets without category metadata. Neither is renameable. Category merge/delete remains outside 0.4.4.
 
 ## Preset metadata
 
-`.cpcprofile` remains authoritative JSON format v1. 0.4.3 adds optional metadata only:
+`.cpcprofile` remains authoritative JSON format v1. The library metadata added in 0.4.3 remains optional:
 
 ```json
 {
@@ -78,19 +77,23 @@ Existing 0.4.0–0.4.2 presets remain valid and appear as `Uncategorized` until 
 
 ## Storage and previews
 
-The default library remains Blender's extension-owned writable user directory via `bpy.utils.extension_path_user()`. A custom folder may still be selected.
+The default library remains Blender's extension-owned writable user directory via `bpy.utils.extension_path_user()`. A custom folder may be selected and is synchronized through CPC preferences and scenes. When a library is first indexed, CPC creates `cpc_library.json` with the starter/discovered category vocabulary.
 
-PNG preview files remain regenerable cache artifacts in 0.4.3. **WebP is reserved for 0.4.4.** CPC continues to use Blender's Image API directly and has no Pillow/PIL dependency.
+PNG preview files remain regenerable cache artifacts. WebP preview storage is a later candidate, not part of 0.4.4. CPC continues to use Blender's Image API directly and has no Pillow/PIL dependency.
 
 ## Compatibility
 
-0.4.3 preserves:
+0.4.4 preserves:
 
 - `.cpcprofile` format v1;
 - recipe schema 11+;
 - transform schema 1 using `matrix_profile`;
+- complete-profile placement schema 1 using `cpc_profile_placement_json`;
 - independent `cpc_part_rotation`;
 - PARAMETRIC/STATIC provenance rules;
 - geometry-authority hashing;
 - Commit → Edit Active Profile → Recommit;
-- connected editing, viewport semantic editing and sweep behavior.
+- connected editing, semantic viewport editing and explicit endpoint reconnection;
+- profile normalization, packed component restoration and Sweep bevel linkage;
+- 2D Caps OFF/ON behavior and live Fill Mode updates;
+- lazy viewport overlay handlers required by Blender Extensions.

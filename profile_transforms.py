@@ -74,6 +74,19 @@ def resolve_profile_placement(state=None, **changes) -> dict:
     return normalize_profile_placement(resolved)
 
 
+def resolve_profile_semantic_field(state, field_id, value) -> dict:
+    value = _finite_float(value, float("nan"))
+    if not math.isfinite(value):
+        raise ProfileTransformError("Profile transform value must be finite")
+    if field_id == "profile_rotation":
+        return resolve_profile_placement(state, rotation=value)
+    if field_id == "profile_uniform_scale":
+        if value <= 0.0:
+            raise ProfileTransformError("Uniform Scale must be greater than zero")
+        return resolve_profile_placement(state, uniform_scale=value)
+    raise ProfileTransformError(f"Unsupported profile semantic field: {field_id}")
+
+
 def capture_profile_resize_state(state=None, object_scale=(1.0, 1.0, 1.0)) -> dict:
     """Capture one fixed semantic baseline for a committed-profile S gesture.
 
