@@ -1,4 +1,4 @@
-# Curve Profile Creator — 0.4.4
+# Curve Profile Creator — 0.5.0
 
 ## Design Decisions
 
@@ -136,3 +136,91 @@ Caps ON  → Fill Mode Both
 The same rule applies at creation, when applying a profile to an existing Curve, and during live Caps changes.
 
 3D paths retain Blender-supported bevel-cap behaviour without forcing 2D Fill Mode values.
+
+
+### DD-030 — Sweep Assemblies are a first-class construction layer
+A Sweep Assembly is not a flattened mesh or anonymous set of bevel objects.
+
+It is a reusable CPC construction layer above complete profiles and below generated Sweep instances:
+
+```text
+component
+→ profile
+→ assembly member
+→ sweep assembly
+→ sweep instance
+```
+
+Each layer retains stable identity and its own authority boundary.
+
+### DD-031 — Embedded assembly member payloads are authoritative
+When a profile is added to an assembly, CPC copies a complete reconstructable profile payload into the assembly.
+
+The embedded payload becomes authoritative for that member.
+
+The original User Profile preset is a source/template, not a live dependency.
+
+Missing, moved, renamed, deleted, or later-modified source presets must not invalidate or silently change an existing assembly.
+
+### DD-032 — Source provenance never grants write authority
+Assembly members may retain source preset ID, name, type, and authority hash for provenance and comparison.
+
+Those fields are descriptive only.
+
+No ordinary assembly operation may infer permission to overwrite the source preset from provenance metadata.
+
+### DD-033 — Recommit boundaries are hierarchical and non-destructive
+**Recommit Profile** inside an Assembly Edit session updates only the selected member's embedded working payload and returns to the parent Assembly Editor.
+
+**Recommit Assembly** commits the complete assembly working copy and may refresh its scene instances.
+
+Neither operation updates User Profile library files.
+
+Writing back to a source preset requires a separately named explicit command.
+
+### DD-034 — Save as New is the preferred library export from an assembly member
+When an edited assembly member should become reusable outside the assembly, the preferred action is **Save as New User Profile**.
+
+**Update Source User Profile…** is a secondary destructive action that requires explicit user confirmation and source revalidation.
+
+Recommit is never overloaded with library-save semantics.
+
+### DD-035 — Assembly editing uses an isolated working copy
+Starting **Edit Assembly** must not immediately mutate the committed Assembly Definition.
+
+The committed assembly remains authoritative while temporary authoring objects represent the working copy.
+
+Cancel discards the working copy. Recommit Assembly serializes the working copy into the committed definition.
+
+This transaction boundary prevents partial edits from propagating into existing scene instances.
+
+### DD-036 — Assembly members reuse canonical profile placement semantics
+Assembly-relative Offset X/Y, Rotation, Flip X/Y, and Uniform Scale use the same fixed semantic transform order established for complete profiles in 0.4.4.
+
+Assembly authoring must not introduce persistent arbitrary Object transforms as a second authority.
+
+### DD-037 — Generated assembly sweeps retain explicit identity relationships
+Generated sweep children are related to stable assembly, instance, member, and source-path IDs.
+
+Object names are presentation only and must not be used as authority for refresh, deletion, or reconstruction.
+
+Refresh operations affect only CPC-owned objects belonging to the targeted relationship graph.
+
+### DD-038 — Sweep Assemblies are self-contained portable documents
+The portable assembly format is `.cpcassembly`, separate from `.cpcprofile`.
+
+A valid assembly contains every member payload required for reconstruction without access to the original User Profile files or source Blender scene.
+
+The existing `.cpcprofile` format v1 remains unchanged.
+
+### DD-039 — Assembly refresh is explicit at the 0.5.0 foundation
+Editing a member or assembly does not trigger room-wide depsgraph regeneration on every interaction.
+
+The authoring preview updates locally. Scene instances refresh at deliberate commit/refresh boundaries.
+
+This keeps editing responsive and makes destructive scope predictable.
+
+### DD-040 — Multi-Curve Sweep extends rather than replaces Single Profile Sweep
+0.5.0 adds Sweep Assembly mode while retaining the existing single-profile Sweep workflow.
+
+Existing 0.4.4 Single Profile behavior remains a protected regression surface.
