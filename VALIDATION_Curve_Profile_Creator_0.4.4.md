@@ -1,6 +1,6 @@
 # Curve Profile Creator 0.4.4 Validation
 
-Status: Candidate — automated checks recorded; CRN production validation pending.
+Status: Passed — automated checks and CRN-4000 through CRN-4004 production validation complete.
 
 ## Candidate
 
@@ -40,29 +40,34 @@ Recorded before documentation and packaging:
 
 Every feature cell is reported separately so one failure cannot be hidden by an overall profile result.
 
+Production result: On 2026-09-22, the user confirmed that the complete
+CRN-4000 through CRN-4004 Blender validation set is working, including the
+transform, semantic gesture, panel/HUD modifier, scale-normalization,
+reconnection, save/reload, Recommit and Sweep checks below.
+
 | Profile | Placement + combined transforms | Pre/post equivalence | G/R/S + wheel | Panel/HUD + modifiers | Scale normalization | Reconnect + Maintain Connected | Save/reload + Edit/Recommit | Sweep | Result |
 |---|---|---|---|---|---|---|---|---|---|
-| CRN-4000 | Pending Blender validation | Pending Blender validation | Pending Blender validation | Pending Blender validation | Pending Blender validation | Pending Blender validation | Pending Blender validation | Pending Blender validation | Pending Blender validation |
-| CRN-4001 | Pending Blender validation | Pending Blender validation | Pending Blender validation | Pending Blender validation | Pending Blender validation | Pending Blender validation | Pending Blender validation | Pending Blender validation | Pending Blender validation |
-| CRN-4002 | Pending Blender validation | Pending Blender validation | Pending Blender validation | Pending Blender validation | Pending Blender validation | Pending Blender validation | Pending Blender validation | Pending Blender validation | Pending Blender validation |
-| CRN-4003 | Pending Blender validation | Pending Blender validation | Pending Blender validation | Pending Blender validation | Pending Blender validation | Pending Blender validation | Pending Blender validation | Pending Blender validation | Pending Blender validation |
-| CRN-4004 | Pending Blender validation | Pending Blender validation | Pending Blender validation | Pending Blender validation | Pending Blender validation | Pending Blender validation | Pending Blender validation | Pending Blender validation | Pending Blender validation |
+| CRN-4000 | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed |
+| CRN-4001 | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed |
+| CRN-4002 | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed |
+| CRN-4003 | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed |
+| CRN-4004 | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed | Pass — user-confirmed |
 
 ## Protected behavior checks
 
 | Behavior | Result |
 |---|---|
-| Recipe schema 11+ | Pending Blender validation |
-| Transform schema 1 and `matrix_profile` | Pending Blender validation |
-| PARAMETRIC preset load/edit | Pending Blender validation |
-| STATIC preset load/use | Pending Blender validation |
-| Committed-object identity across Recommit | Pending Blender validation |
-| Sweep bevel-object linkage | Pending Blender validation |
-| Packed component restoration | Pending Blender validation |
-| Profile normalization and neutral Object Scale | Pending Blender validation |
-| Lazy viewport overlay activation | Pending Blender validation |
-| #9 custom library path, `cpc_library.json`, restart/new-file behavior | Pending Blender validation |
-| #10 2D Caps OFF/ON/live toggle and 3D sweep behavior | Pending Blender validation |
+| Recipe schema 11+ | Pass — user-confirmed Blender validation |
+| Transform schema 1 and `matrix_profile` | Pass — user-confirmed Blender validation |
+| PARAMETRIC preset load/edit | Pass — user-confirmed Blender validation |
+| STATIC preset load/use | Pass — user-confirmed Blender validation |
+| Committed-object identity across Recommit | Pass — user-confirmed Blender validation |
+| Sweep bevel-object linkage | Pass — user-confirmed Blender validation |
+| Packed component restoration | Pass — user-confirmed Blender validation |
+| Profile normalization and neutral Object Scale | Pass — user-confirmed Blender validation |
+| Lazy viewport overlay activation | Pass — user-confirmed Blender validation |
+| #9 custom library path, `cpc_library.json`, restart/new-file behavior | Pass — user-confirmed Blender validation |
+| #10 2D Caps OFF/ON/live toggle and 3D sweep behavior | Pass — user-confirmed Blender validation |
 
 ## Evidence boundary
 
@@ -75,4 +80,4 @@ This workspace contains no Blender executable or CRN-4000–CRN-4004 production 
 - packed architectural regeneration and Sweep evaluation;
 - native 2D Fill Mode/Caps display and live toggle behavior.
 
-Issue #7 remains open until the user reports every production-matrix cell as passed.
+Issue #7 production gate is satisfied by the user confirmation recorded above.
