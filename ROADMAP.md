@@ -1,51 +1,194 @@
-# Curve Profile Creator — 0.4.4
+# Curve Profile Creator — 0.5.0
 
 ## Roadmap
 
-### Current release — Transform and Connectivity
+### Development milestone — Sweep Assemblies
 
-The 0.4.4 milestone closes issues #2 through #10 while preserving the 0.4.x persistence floor and the validated modelling behaviour carried forward from 0.4.1–0.4.3.
+CPC 0.5.0 introduces a new construction layer above complete profiles: **Sweep Assemblies**.
 
-#### Completed scope
+A Sweep Assembly combines multiple complete CPC profiles into one reusable cross-section arrangement that can be edited hierarchically and applied across multiple scene Curve paths.
 
-- canonical complete-profile placement state for Offset X/Y, Rotation, Flip X/Y and Uniform Scale;
-- equivalent placement-time and post-placement transform results;
-- semantic Blender `G` / `R` / `S` routing for committed profiles and construction parts;
-- component placement-wheel / `S` / panel / HUD Size with neutral Object Scale;
-- committed-profile Rotation and Uniform Scale controls;
-- shared Shift/Ctrl fine and snapped semantic gestures;
-- explicit metadata-only **Reconnect Touching Endpoints**;
-- persistent custom User Profile library path;
-- immediate `cpc_library.json` initialization for active library roots;
-- authoritative 2D Sweep Caps / Fill Mode behaviour;
-- retained Blender-supported 3D sweep cap behaviour;
-- clean Extension packaging that excludes tests and development artifacts;
-- production regression validation against CRN-4000 through CRN-4004.
+The validated CPC 0.4.4 release remains the implementation baseline.
 
-#### Release acceptance
+## 0.5.0 primary goals
 
-0.4.4 is accepted when:
+### 1. Multi-profile Sweep Assemblies
 
-1. CRN-4000 through CRN-4004 pass the versioned Blender production matrix.
-2. Existing PARAMETRIC and STATIC presets load with recipe schema 11+, transform schema 1 and `.cpcprofile` format v1.
-3. Edit Active Profile / Recommit preserves committed object identity and linked Sweep bevel objects.
-4. Complete-profile transforms resolve through one canonical placement state.
-5. Component resize operations update semantic dimensions and return Object Scale to `1,1,1`.
-6. Reconnect repairs only touching endpoint metadata and Maintain Connected follows the rebuilt chain.
-7. Custom User Profile path and category registry survive restart/new-file workflows.
-8. 2D Sweep Caps update Fill Mode correctly and live.
-9. The install archive contains no tests, bytecode, Git metadata, planning documents or nested archives.
-10. Automated release checks pass.
+Allow two or more complete profiles to be arranged as one assembly.
 
-All listed 0.4.4 release acceptance items have been validated.
+Each member retains:
 
-## Later candidates
+- its own complete profile payload;
+- stable member identity;
+- canonical Offset X/Y;
+- Rotation;
+- Flip X/Y;
+- Uniform Scale;
+- optional source provenance.
 
-The following are candidates, not commitments:
+The assembly uses the 0.4.4 canonical placement model rather than a new transform authority.
 
-- WebP preview storage using Blender-native APIs while continuing to read existing PNG previews;
-- batch migration/export of existing Blender curve/profile asset collections into `.cpcprofile` libraries;
-- explicit category merge/delete if production use justifies it;
-- broader public profile-library tooling after metadata and licensing workflows are proven;
-- further semantic transform coverage only where Blender interaction can map cleanly to CPC construction intent;
-- additional production regression profiles as the component catalogue expands.
+### 2. Visual assembly authoring
+
+Support **Create Sweep Assembly from Selected Profiles**.
+
+Users may arrange complete profiles visually in the profile plane, select them, and capture their relative arrangement as one Assembly Definition.
+
+### 3. Embedded profile variants are authoritative
+
+Adding a User Profile to an assembly copies its complete usable payload into the assembly.
+
+After insertion, the embedded member variant is authoritative.
+
+Ordinary assembly editing must never overwrite the source User Profile preset.
+
+This includes:
+
+- Edit Member Profile;
+- Recommit Profile;
+- member placement changes;
+- Recommit Assembly;
+- instance refresh.
+
+Source preset identity/hash is retained only as provenance.
+
+### 4. Safe explicit source-preset actions
+
+Assembly members may expose explicit secondary actions:
+
+- **Save as New User Profile** — preferred/default;
+- **Update Source User Profile…** — deliberate overwrite with confirmation;
+- **Reload from Source…** — deliberate replacement of the embedded variant.
+
+Recommit must never be overloaded to mean "write back to the library."
+
+### 5. Nested assembly/member editing
+
+The intended workflow is:
+
+```text
+Edit Assembly
+→ select member
+→ Edit Member Profile
+→ edit normal CPC construction
+→ Recommit Profile
+→ return to Assembly Editor
+→ adjust relative placement
+→ Recommit Assembly
+→ refresh assembly instances
+```
+
+Other members remain visible as locked/ghosted context while one profile is edited.
+
+Recommit Profile updates only the assembly working copy.
+
+Recommit Assembly updates the authoritative Assembly Definition.
+
+### 6. Non-destructive working-copy editing
+
+Starting Edit Assembly does not mutate the committed Assembly Definition.
+
+The committed JSON remains unchanged while temporary authoring objects represent the working copy.
+
+Therefore:
+
+```text
+Edit Assembly
+→ working authoring objects
+
+Cancel
+→ discard working objects
+→ committed assembly unchanged
+
+Recommit Assembly
+→ serialize working objects
+→ replace committed assembly definition
+```
+
+### 7. Multi-Curve application
+
+One active assembly can be applied to multiple selected Curve paths in one operation.
+
+For M enabled assembly members and N source paths, CPC may generate M × N CPC-owned sweep children.
+
+Existing Single Profile Sweep remains available and behaviorally compatible.
+
+### 8. Stable assembly instance relationships
+
+Generated results must be traceable through stable IDs rather than object names.
+
+The scene relationship is:
+
+```text
+Assembly Definition
+        ↓
+Assembly Instance
+        ↓
+Source Path(s)
+        ↓
+Generated Sweep Children
+```
+
+Refresh affects only CPC-owned children belonging to the selected assembly/instance and never edits source paths or unrelated geometry.
+
+### 9. Portable `.cpcassembly` v1
+
+Introduce a self-contained Sweep Assembly document format separate from `.cpcprofile`.
+
+A valid `.cpcassembly` must reconstruct all member profiles without requiring the original User Profile library.
+
+The existing `.cpcprofile` format v1 remains unchanged.
+
+## Protected 0.4.4 baseline
+
+0.5.0 development must preserve:
+
+- recipe schema 11+;
+- transform schema 1;
+- `.cpcprofile` format v1;
+- PARAMETRIC / STATIC behavior;
+- canonical complete-profile placement;
+- in-place profile Recommit;
+- semantic component Size and neutral Object Scale;
+- explicit endpoint reconnection;
+- User Profile Categories/Search/indexing;
+- persistent custom User Profile path;
+- existing single-profile Sweep;
+- 2D Caps / Fill Mode semantics;
+- lazy viewport overlay lifecycle.
+
+## 0.5.0 release acceptance
+
+0.5.0 is accepted when:
+
+1. a two-member assembly can be created visually from complete CPC profiles;
+2. member payloads are self-contained and survive deletion/change of their source presets;
+3. PARAMETRIC members can be reopened and Recommitted inside an Assembly Edit session;
+4. other members remain visible as non-editable context during member editing;
+5. member Recommit preserves member ID, relative placement, ordering, and provenance;
+6. Cancel Member Edit restores the member working copy;
+7. Cancel Assembly Edit restores the complete committed assembly;
+8. Recommit Assembly refreshes matching scene instances safely;
+9. one assembly can be applied to multiple selected Curve paths;
+10. generated children retain stable assembly/member/path/instance relationships;
+11. `.cpcassembly` save/load round-trips PARAMETRIC and STATIC members;
+12. ordinary assembly editing never modifies User Profile preset files;
+13. Save as New User Profile creates a separate preset;
+14. Update Source User Profile requires explicit confirmation;
+15. existing Single Profile Sweep and 0.4.4 production behavior remain valid;
+16. automated and production Blender validation pass.
+
+## Deferred beyond the core 0.5.0 milestone
+
+Candidates for later work include:
+
+- assembly thumbnail previews and indexed browser;
+- Path Roles such as CROWN / BASE / PANEL;
+- tagged-path and collection-wide application;
+- optional source-difference comparison UI;
+- selective member refresh;
+- controlled live refresh;
+- room-wide trim packages;
+- higher-level architectural path discovery;
+- WebP preview storage;
+- public profile/assembly library tooling.
