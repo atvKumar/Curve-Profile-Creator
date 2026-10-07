@@ -430,6 +430,13 @@ class CPC_PT_Main(Panel):
             info.enabled = False
             info.label(text="Select a CPC construction part to edit it")
 
+        adopt = box.row()
+        adopt.operator(
+            "cpc.adopt_bezier_part",
+            text="Adopt Selected Blender Bézier",
+            icon='OUTLINER_OB_CURVE',
+        )
+
         editing_profile_id = str(getattr(settings, "editing_profile_id", "") or "").strip()
         if editing_profile_id:
             profile = settings.active_profile
