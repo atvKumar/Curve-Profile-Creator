@@ -460,21 +460,63 @@ def serialize_custom_bezier(obj):
 
 
 def rebase_custom_bezier_to_start(obj):
-    """Move object origin to the first Bézier point without changing world geometry."""
-    spec = serialize_custom_bezier(obj)
+    """Move object origin to the first Bézier point without changing its shape.
+
+    Do not assign Bézier co/handle coordinates one-by-one here. Blender's
+    ALIGNED/AUTO handle rules may update the opposite handle during those RNA
+    assignments and visibly distort the user's curve. Transforming the Curve
+    datablock applies one rigid translation to points and handles together,
+    preserving Blender's native handle relationships.
+    """
+    serialize_custom_bezier(obj)  # Validate before mutating anything.
+
+    # Do not alter other objects that happen to share this Curve datablock.
+    if getattr(obj.data, "users", 1) > 1:
+        obj.data = obj.data.copy()
+
     spline = obj.data.splines[0]
     start = spline.bezier_points[0].co.copy()
     if start.length_squared <= 1.0e-20:
-        return spec
+        return serialize_custom_bezier(obj)
 
-    for bp in spline.bezier_points:
-        bp.co = bp.co - start
-        bp.handle_left = bp.handle_left - start
-        bp.handle_right = bp.handle_right - start
+    local_shift = Matrix.Translation(-start)
 
-    # Right-multiplying by a local translation preserves every world-space
-    # control point while making the first point the component-local origin.
+    transform = getattr(obj.data, "transform", None)
+    if callable(transform):
+        # One datablock transform keeps co + both handles moving rigidly as a
+        # unit, so ALIGNED/AUTO constraints never see an intermediate state.
+        transform(local_shift)
+    else:
+        # Compatibility fallback: temporarily FREE the handles, perform the
+        # same rigid translation from a complete snapshot, then restore the
+        # user's native handle types.
+        snapshots = []
+        for bp in spline.bezier_points:
+            snapshots.append({
+                "co": bp.co.copy(),
+                "handle_left": bp.handle_left.copy(),
+                "handle_right": bp.handle_right.copy(),
+                "handle_left_type": str(bp.handle_left_type),
+                "handle_right_type": str(bp.handle_right_type),
+            })
+            bp.handle_left_type = 'FREE'
+            bp.handle_right_type = 'FREE'
+
+        for bp, saved in zip(spline.bezier_points, snapshots):
+            bp.co = saved["co"] - start
+            bp.handle_left = saved["handle_left"] - start
+            bp.handle_right = saved["handle_right"] - start
+
+        for bp, saved in zip(spline.bezier_points, snapshots):
+            bp.handle_left_type = saved["handle_left_type"]
+            bp.handle_right_type = saved["handle_right_type"]
+
+    # Compensate in object space so every world-space control point/handle
+    # remains exactly where the user drew it. Only the component-local origin
+    # changes: the first Bézier point becomes (0, 0, 0).
     obj.matrix_world = obj.matrix_world @ Matrix.Translation(start)
+    obj.update_tag()
+
     return serialize_custom_bezier(obj)
 
 
