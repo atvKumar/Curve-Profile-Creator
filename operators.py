@@ -2218,20 +2218,37 @@ class CPC_OT_AdoptBezierPart(Operator):
         obj.hide_set(False)
         obj.hide_render = False
 
-        # Adoption is itself an explicit semantic action, so it is safe to
-        # establish endpoint metadata for any already-touching parts in this
-        # active construction session. Geometry is never moved here.
+        # Adoption is an explicit semantic action, but only the adopted
+        # section's own endpoints are eligible for automatic connection here.
+        # Unrelated touching CPC parts are left alone.
         parts = _active_builder_parts(context.scene, settings)
-        try:
-            stats = junctions.reconnect_touching_endpoints(parts, settings.merge_tolerance)
-        except Exception:
-            stats = None
+        tolerance = max(float(settings.merge_tolerance), 1.0e-6)
+        connected_count = 0
+        others = [part for part in parts if part != obj]
+        for custom_endpoint in (0, 1):
+            custom_world = library.object_endpoint_world(obj, custom_endpoint)
+            best = None
+            for other in others:
+                for other_endpoint in (0, 1):
+                    other_world = library.object_endpoint_world(other, other_endpoint)
+                    distance = (custom_world - other_world).length
+                    if best is None or distance < best[0]:
+                        best = (distance, other, other_endpoint)
+            if best and best[0] <= tolerance:
+                junctions.connect_endpoints(
+                    obj,
+                    custom_endpoint,
+                    best[1],
+                    best[2],
+                    objects=parts,
+                )
+                connected_count += 1
 
         connected_transforms.sync_object(obj)
-        if stats and stats.endpoints:
+        if connected_count:
             self.report(
                 {'INFO'},
-                f"Adopted native Bézier '{obj.name}' and connected {stats.endpoints} touching endpoint(s)",
+                f"Adopted native Bézier '{obj.name}' and connected {connected_count} endpoint(s)",
             )
         else:
             self.report({'INFO'}, f"Adopted native Bézier '{obj.name}' as a CPC custom section")
