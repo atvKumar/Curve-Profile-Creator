@@ -274,6 +274,9 @@ def _component_recipe_snapshot(parts):
             "part_rotation": float(getattr(obj, "cpc_part_rotation", 0.0)),
             "matrix_world": [list(row) for row in obj.matrix_world],
         }
+        if obj.get("cpc_custom_bezier"):
+            record["component_type"] = "CUSTOM_BEZIER"
+            record["custom_bezier"] = geometry.serialize_custom_bezier(obj)
         if obj.get("cpc_parameters"):
             try:
                 record["parameters"] = json.loads(obj["cpc_parameters"])
@@ -412,40 +415,53 @@ def _restore_recipe_parts(context, profile, *, placement_matrix=None):
     restored = []
     for record in sorted(records, key=lambda item: int(item.get("sequence", 0))):
         component_id = str(record.get("id", "")).strip() or f"cpc-{uuid.uuid4()}"
+        component_type = str(record.get("component_type", "") or "").strip().upper()
+        custom_spec = record.get("custom_bezier") if isinstance(record.get("custom_bezier"), dict) else None
         primitive_id = str(record.get("primitive_id", "") or "").strip()
-        if not primitive_id:
-            warnings.append(f"Recipe record '{record.get('name', component_id)}' has no primitive_id")
-            continue
-        params = record.get("parameters", {})
-        if not isinstance(params, dict):
-            params = {}
 
         old = existing.get(component_id)
         if old is not None:
             _remove_part_object(old)
 
-        try:
-            obj = primitives.create_object(
-                primitive_id,
-                float(params.get("width", 0.05)),
-                float(params.get("height", 0.025)),
-                shape_mode=str(params.get("shape_mode", "CIRCLE")),
-                bias=float(params.get("bias", 0.5)),
-                fullness=float(params.get("fullness", 1.0)),
-                concave_fullness=float(params.get("concave_fullness", 1.0)),
-                convex_fullness=float(params.get("convex_fullness", 1.0)),
-                arc_construction_mode=str(params.get("arc_construction_mode", "ARC_DEPTH")),
-                arc_depth=float(params.get(
-                    "arc_depth",
-                    primitive_geometry.default_arc_depth_for_primitive(
-                        primitive_id, float(params.get("width", 0.05))
-                    ),
-                )),
-            )
-        except Exception as exc:
-            warnings.append(f"Could not restore {primitive_id}: {exc}")
-            continue
-        library.relink_object(obj, coll)
+        if component_type == "CUSTOM_BEZIER" or custom_spec is not None:
+            try:
+                obj = geometry.create_custom_bezier_part(
+                    str(record.get("name", "Custom Bezier")),
+                    custom_spec or {},
+                    coll,
+                )
+            except Exception as exc:
+                warnings.append(f"Could not restore custom Bézier '{record.get('name', component_id)}': {exc}")
+                continue
+        else:
+            if not primitive_id:
+                warnings.append(f"Recipe record '{record.get('name', component_id)}' has no primitive_id")
+                continue
+            params = record.get("parameters", {})
+            if not isinstance(params, dict):
+                params = {}
+            try:
+                obj = primitives.create_object(
+                    primitive_id,
+                    float(params.get("width", 0.05)),
+                    float(params.get("height", 0.025)),
+                    shape_mode=str(params.get("shape_mode", "CIRCLE")),
+                    bias=float(params.get("bias", 0.5)),
+                    fullness=float(params.get("fullness", 1.0)),
+                    concave_fullness=float(params.get("concave_fullness", 1.0)),
+                    convex_fullness=float(params.get("convex_fullness", 1.0)),
+                    arc_construction_mode=str(params.get("arc_construction_mode", "ARC_DEPTH")),
+                    arc_depth=float(params.get(
+                        "arc_depth",
+                        primitive_geometry.default_arc_depth_for_primitive(
+                            primitive_id, float(params.get("width", 0.05))
+                        ),
+                    )),
+                )
+            except Exception as exc:
+                warnings.append(f"Could not restore {primitive_id}: {exc}")
+                continue
+            library.relink_object(obj, coll)
 
         obj.name = str(record.get("name", obj.name))
         obj["cpc_part"] = True
@@ -2148,6 +2164,80 @@ class CPC_OT_ReconnectTouchingEndpoints(Operator):
         return {'FINISHED'}
 
 
+class CPC_OT_AdoptBezierPart(Operator):
+    bl_idname = "cpc.adopt_bezier_part"
+    bl_label = "Adopt Selected Bézier"
+    bl_description = "Adopt the selected native Blender Bézier curve as a CPC custom construction section"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        obj = getattr(context, "object", None)
+        return bool(
+            obj
+            and obj.type == 'CURVE'
+            and not obj.get("cpc_part")
+            and not obj.get("cpc_profile")
+            and not obj.get("cpc_preview")
+        )
+
+    def execute(self, context):
+        settings = _settings(context)
+        obj = getattr(context, "object", None)
+        if not obj:
+            return {'CANCELLED'}
+
+        try:
+            geometry.rebase_custom_bezier_to_start(obj)
+        except Exception as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+
+        coll = library.ensure_builder_collection(context.scene)
+        library.relink_object(obj, coll)
+
+        obj["cpc_part"] = True
+        obj["cpc_custom_bezier"] = True
+        obj["cpc_preview"] = False
+        obj["cpc_seq"] = _next_seq(context.scene, settings)
+        obj["cpc_anchor_index"] = 0
+        obj["cpc_primitive_id"] = ""
+        obj["cpc_primitive_name"] = "Custom Bézier"
+        _ensure_component_id(obj)
+
+        editing_profile_id = str(getattr(settings, "editing_profile_id", "") or "").strip()
+        if editing_profile_id:
+            obj["cpc_owner_profile_id"] = editing_profile_id
+            obj.pop("cpc_build_session_id", None)
+        else:
+            session_id = _ensure_build_session(context)
+            obj["cpc_build_session_id"] = session_id
+            obj.pop("cpc_owner_profile_id", None)
+
+        obj.show_in_front = True
+        obj.hide_set(False)
+        obj.hide_render = False
+
+        # Adoption is itself an explicit semantic action, so it is safe to
+        # establish endpoint metadata for any already-touching parts in this
+        # active construction session. Geometry is never moved here.
+        parts = _active_builder_parts(context.scene, settings)
+        try:
+            stats = junctions.reconnect_touching_endpoints(parts, settings.merge_tolerance)
+        except Exception:
+            stats = None
+
+        connected_transforms.sync_object(obj)
+        if stats and stats.endpoints:
+            self.report(
+                {'INFO'},
+                f"Adopted native Bézier '{obj.name}' and connected {stats.endpoints} touching endpoint(s)",
+            )
+        else:
+            self.report({'INFO'}, f"Adopted native Bézier '{obj.name}' as a CPC custom section")
+        return {'FINISHED'}
+
+
 class CPC_OT_DeleteLastPart(Operator):
     bl_idname = "cpc.delete_last_part"
     bl_label = "Delete Last Part"
@@ -3577,6 +3667,7 @@ _CLASSES = (
     CPC_OT_SetEditAnchor,
     CPC_OT_AdjustPartRotation,
     CPC_OT_ReconnectTouchingEndpoints,
+    CPC_OT_AdoptBezierPart,
     CPC_OT_DeleteLastPart,
     CPC_OT_ClearParts,
     CPC_OT_CommitProfile,
