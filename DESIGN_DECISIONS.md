@@ -1,4 +1,4 @@
-# Curve Profile Creator — 0.4.4
+# Curve Profile Creator — 0.4.6 Development
 
 ## Design Decisions
 
@@ -136,3 +136,45 @@ Caps ON  → Fill Mode Both
 The same rule applies at creation, when applying a profile to an existing Curve, and during live Caps changes.
 
 3D paths retain Blender-supported bevel-cap behaviour without forcing 2D Fill Mode values.
+
+### DD-030 — 0.4.5 is an abandoned experiment
+The edit-point / S-curve direction explored for 0.4.5 is not part of the supported development lineage.
+
+0.4.6 branches from the validated 0.4.4 baseline rather than inheriting 0.4.5 experimental work.
+
+Any preserved 0.4.5 code is archive/history only and must not be treated as a supported release.
+
+### DD-031 — Custom Bézier is an extension section, not a replacement component system
+A native Blender Bézier section may extend a CPC-built chain where a semantic CPC component is not appropriate.
+
+The feature is specifically intended to bridge from structured CPC construction into freeform Blender curve modelling and back into the CPC assembly.
+
+### DD-032 — Blender owns internal Bézier editing; CPC owns assembly semantics
+CPC must preserve native Bézier control points, handles and handle types.
+
+CPC should not implement a competing Bézier solver or silently sample the section into static point geometry.
+
+CPC owns the custom section's entry/exit anchors, placement, connectivity, Commit/Recommit integration and assembly-level transforms.
+
+### DD-033 — Entry anchor is the custom section's local origin
+The first Bézier control point defines the entry anchor and local origin of the custom section.
+
+Internal points and handles are represented in the section's local space. When an upstream CPC component moves, Keep Components Together updates the section placement transform rather than deforming its stored local geometry.
+
+### DD-034 — Exit anchor is derived from the final Bézier point
+The last Bézier control point is the custom section's exit anchor and is a valid connection point for subsequent CPC components.
+
+### DD-035 — Keep Components Together preserves custom-section shape
+Upstream connection movement repositions the custom Bézier rigidly as a section.
+
+All native points and handles retain their local relationship. Automatic stretching, reshaping or tangent solving is outside the initial 0.4.6 scope.
+
+### DD-036 — Positional continuity first
+0.4.6 requires positional continuity at custom Bézier entry/exit connections.
+
+Automatic tangent continuity, tangent inheritance and deformation propagation are deferred until the basic attachment model is validated.
+
+### DD-037 — Adopt existing native Bézier before building a drawing mode
+The first implementation spike should adopt an already-created Blender Bézier curve into a CPC chain.
+
+A CPC-specific custom-curve drawing mode may later automate creation of the same underlying native representation, but it must not introduce a separate curve model.
