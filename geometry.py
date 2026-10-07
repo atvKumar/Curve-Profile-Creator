@@ -1,7 +1,7 @@
 import os
 import bpy
 import bmesh
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 
 def set_curve_fill_both(curve):
@@ -389,13 +389,15 @@ def bezier_splines_world(obj):
         for point_index, bp in enumerate(spline.bezier_points):
             left_type = str(bp.handle_left_type)
             right_type = str(bp.handle_right_type)
-            # CPC's canonical primitives use explicit FREE/VECTOR semantics.
-            # Automatic/aligned legacy handles can be recalculated by Blender
-            # when neighboring topology changes, so use sampled fallback rather
-            # than claim an exact preservation we cannot guarantee.
-            if left_type not in {'FREE', 'VECTOR'} or right_type not in {'FREE', 'VECTOR'}:
+            # 0.4.6 custom Bézier adoption preserves Blender's native handle
+            # semantics instead of restricting committed geometry to CPC's
+            # canonical FREE/VECTOR subset. AUTO/AUTO_CLAMPED are reconstructed
+            # from the same control points and neighbouring topology; ALIGNED
+            # retains Blender's native alignment constraint.
+            supported_handle_types = {'FREE', 'VECTOR', 'ALIGNED', 'AUTO', 'AUTO_CLAMPED'}
+            if left_type not in supported_handle_types or right_type not in supported_handle_types:
                 return None, (
-                    f"spline {index + 1} point {point_index + 1} uses "
+                    f"spline {index + 1} point {point_index + 1} uses unsupported "
                     f"{left_type}/{right_type} handles"
                 )
             points.append({
@@ -411,6 +413,107 @@ def bezier_splines_world(obj):
         result.append(points)
 
     return result, ""
+
+
+def serialize_custom_bezier(obj):
+    """Serialize one open native Blender Bézier spline in object-local space.
+
+    0.4.6 deliberately starts with a single-spline adoption spike. Keeping the
+    geometry local to the object lets CPC move the component by its placement
+    matrix without rewriting control points/handles during Maintain Connected.
+    """
+    if not obj or obj.type != 'CURVE':
+        raise ValueError("Select a Blender Curve object")
+    if len(obj.data.splines) != 1:
+        raise ValueError("Custom Bézier adoption currently requires exactly one spline")
+
+    spline = obj.data.splines[0]
+    if spline.type != 'BEZIER':
+        raise ValueError("Custom curve must use a Bézier spline")
+    if spline.use_cyclic_u:
+        raise ValueError("Custom Bézier adoption currently supports open splines only")
+    if len(spline.bezier_points) < 2:
+        raise ValueError("Custom Bézier needs at least two control points")
+
+    points = []
+    for bp in spline.bezier_points:
+        points.append({
+            "co": [float(v) for v in bp.co],
+            "handle_left": [float(v) for v in bp.handle_left],
+            "handle_right": [float(v) for v in bp.handle_right],
+            "handle_left_type": str(bp.handle_left_type),
+            "handle_right_type": str(bp.handle_right_type),
+            "radius": float(bp.radius),
+            "tilt": float(bp.tilt),
+            "weight_softbody": float(bp.weight_softbody),
+        })
+
+    return {
+        "version": 1,
+        "spline_type": "BEZIER",
+        "cyclic": False,
+        "resolution_u": int(getattr(spline, "resolution_u", 12)),
+        "curve_resolution_u": int(getattr(obj.data, "resolution_u", 12)),
+        "render_resolution_u": int(getattr(obj.data, "render_resolution_u", 24)),
+        "points": points,
+    }
+
+
+def rebase_custom_bezier_to_start(obj):
+    """Move object origin to the first Bézier point without changing world geometry."""
+    spec = serialize_custom_bezier(obj)
+    spline = obj.data.splines[0]
+    start = spline.bezier_points[0].co.copy()
+    if start.length_squared <= 1.0e-20:
+        return spec
+
+    for bp in spline.bezier_points:
+        bp.co = bp.co - start
+        bp.handle_left = bp.handle_left - start
+        bp.handle_right = bp.handle_right - start
+
+    # Right-multiplying by a local translation preserves every world-space
+    # control point while making the first point the component-local origin.
+    obj.matrix_world = obj.matrix_world @ Matrix.Translation(start)
+    return serialize_custom_bezier(obj)
+
+
+def create_custom_bezier_part(name, spec, collection):
+    """Reconstruct a CPC custom Bézier construction part from recipe-local data."""
+    if not isinstance(spec, dict):
+        raise ValueError("Custom Bézier recipe is invalid")
+    points = spec.get("points")
+    if not isinstance(points, list) or len(points) < 2:
+        raise ValueError("Custom Bézier recipe has fewer than two control points")
+
+    curve = bpy.data.curves.new(name=f"{name}_Curve", type='CURVE')
+    curve.dimensions = '2D'
+    curve.resolution_u = int(spec.get("curve_resolution_u", 12))
+    curve.render_resolution_u = int(spec.get("render_resolution_u", 24))
+    set_curve_fill_both(curve)
+
+    spline = curve.splines.new('BEZIER')
+    spline.bezier_points.add(len(points) - 1)
+    spline.resolution_u = int(spec.get("resolution_u", 12))
+
+    # Coordinates first, then native handle types. This mirrors CPC's existing
+    # Bézier writer while allowing Blender to re-establish AUTO/ALIGNED rules.
+    for bp, point in zip(spline.bezier_points, points):
+        bp.co = point.get("co", (0.0, 0.0, 0.0))
+        bp.handle_left = point.get("handle_left", point.get("co", (0.0, 0.0, 0.0)))
+        bp.handle_right = point.get("handle_right", point.get("co", (0.0, 0.0, 0.0)))
+        bp.radius = float(point.get("radius", 1.0))
+        bp.tilt = float(point.get("tilt", 0.0))
+        bp.weight_softbody = float(point.get("weight_softbody", 0.0))
+
+    for bp, point in zip(spline.bezier_points, points):
+        bp.handle_left_type = str(point.get("handle_left_type", "FREE"))
+        bp.handle_right_type = str(point.get("handle_right_type", "FREE"))
+
+    obj = bpy.data.objects.new(name, curve)
+    collection.objects.link(obj)
+    obj["cpc_custom_bezier"] = True
+    return obj
 
 
 def _reverse_bezier_points(points):
