@@ -1,0 +1,51 @@
+name: Package CPC 0.4.6 Preset Fix
+
+on:
+  push:
+    branches:
+      - dev/0.4.6
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify source
+        shell: bash
+        run: |
+          grep -F 'EXTENSION_VERSION = "0.4.6"' __init__.py
+          grep -F 'version = "0.4.6"' blender_manifest.toml
+          python -m compileall -q *.py
+          python -m unittest tests.test_custom_bezier_preset
+
+      - name: Upload Blender extension test package
+        uses: actions/upload-artifact@v4
+        with:
+          name: curve_profile_creator-0.4.6-test-presetfix
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            __init__.py
+            architectural_components.py
+            architectural_recipes.py
+            compound_geometry.py
+            connected_transforms.py
+            constructed_shapes.py
+            endpoint_reconnect.py
+            geometry.py
+            interaction_units.py
+            junctions.py
+            library.py
+            operators.py
+            placement_parameters.py
+            primitive_geometry.py
+            primitives.py
+            profile_presets.py
+            profile_transforms.py
+            properties.py
+            semantic_gestures.py
+            ui.py
+            user_profiles.py
+            viewport_overlay.py
+            viewport_semantics.py
+            blender_manifest.toml
