@@ -1,22 +1,213 @@
-# Curve Profile Creator — 0.4.4
+# Curve Profile Creator — 0.4.6
 
-Curve Profile Creator (CPC) is a Blender Extension for constructing, editing, committing, saving, reusing and sweeping parametric architectural profile curves.
+Curve Profile Creator (CPC) is a Blender Extension for constructing, editing, committing, saving, reusing and sweeping architectural profile curves.
 
-CPC is construction-first: profiles are built from semantic primitives and architectural components rather than treated as arbitrary curve geometry. CPC preserves construction intent so profiles can be edited, reconnected, recommitted and reused later.
+CPC is construction-first: most profiles are built from semantic primitives and architectural components whose dimensions remain editable. **0.4.6 extends that workflow with native Blender Bézier sections**, allowing a CPC profile to move naturally between structured parametric construction and freeform curve modelling without losing CPC connectivity, Commit/Recommit or preset behaviour.
 
 - **Blender:** 4.3 or newer
 - **Persistence baseline:** CPC 0.4.0
 - **Recipe schema:** 11+
 - **Preset format:** `.cpcprofile` v1
 - **Transform schema:** 1
+- **Development line:** 0.4.6 branches from the validated 0.4.4 release
 
-## What 0.4.4 changes
+## What 0.4.6 changes
 
-0.4.4 is the **Transform and Connectivity** release. It makes complete-profile placement, component resizing and endpoint relationships behave consistently across CPC controls and normal Blender interaction.
+0.4.6 introduces **Custom Bézier Integration**.
 
-### One authoritative profile placement state
+A profile can now be constructed primarily with CPC components and extended with a native Blender Bézier curve wherever a semantic CPC component is not the right tool for the required shape.
 
-A committed CPC profile now resolves through one canonical placement state:
+Typical workflow:
+
+```text
+CPC Line
+→ CPC Ovolo
+→ native Blender Bézier
+→ CPC Cove / Line / next component
+→ Commit
+```
+
+The goal is not to replace Blender's Bézier tools. Blender remains responsible for editing the freeform curve; CPC adds the construction, connectivity and persistence layer around it.
+
+## Adopt Selected Blender Bézier
+
+A normal Blender Bézier Curve can now be adopted into the active CPC construction using:
+
+**Adopt Selected Blender Bézier**
+
+The adopted curve becomes a CPC custom construction section while retaining its native Blender control points and handles.
+
+CPC preserves:
+
+- control-point coordinates;
+- left and right handle coordinates;
+- Blender handle types;
+- radius;
+- tilt;
+- soft-body weight;
+- spline resolution information;
+- CPC entry/exit connectivity;
+- Commit/Recommit reconstruction data.
+
+The curve is **not sampled into a dense static polyline** during adoption.
+
+### Native handle types
+
+0.4.6 supports Blender-native Bézier handle semantics including:
+
+- Free
+- Vector
+- Aligned
+- Auto
+- Auto Clamped
+
+Adoption preserves the user's existing curve shape. CPC rebases the Curve datablock with one rigid local transform rather than moving control points and handles individually, avoiding handle recalculation or shape distortion.
+
+If the selected Blender Curve datablock is shared by multiple objects, CPC first creates an independent copy before rebasing it so adoption does not alter another object using the same Curve data.
+
+## Custom Bézier local origin
+
+For an adopted custom section:
+
+```text
+first Bézier point = CPC local origin
+last Bézier point  = CPC exit anchor
+```
+
+The first point is rebased to local:
+
+```text
+(0, 0, 0)
+```
+
+without changing the curve's world-space shape.
+
+This gives the custom section the same clean component-transform model used elsewhere in CPC:
+
+```text
+local Bézier geometry
+→ component transform
+→ CPC assembly / profile transform
+→ world position
+```
+
+The internal Bézier geometry therefore stays stable while CPC moves the section through its component transform.
+
+## Maintain Connected Parts
+
+Custom Bézier sections participate in CPC's existing endpoint-junction system.
+
+Example:
+
+```text
+Line → Ovolo → Custom Bézier → Cove
+```
+
+If the Ovolo changes and its connected endpoint moves, **Maintain Connected Parts** moves the custom Bézier section with that endpoint while preserving the custom curve's local shape.
+
+Conceptually:
+
+```text
+upstream endpoint moves
+→ custom section transform follows
+→ internal Bézier shape stays unchanged
+→ custom exit anchor moves with it
+→ downstream CPC components follow
+```
+
+0.4.6 intentionally uses **positional continuity** as the initial rule.
+
+CPC does not automatically stretch the custom section, recalculate its control points or force tangent continuity when neighbouring components change.
+
+> CPC owns the connections. Blender owns the freeform curve.
+
+## Move, Rotate and connected transforms
+
+Adopted custom Bézier sections participate in the same connected transform system as normal CPC construction parts.
+
+Validated behaviour includes:
+
+- moving the connected construction;
+- rotating connected parts;
+- Maintain Connected propagation;
+- preserving the custom Bézier shape while the assembly moves;
+- maintaining valid downstream connection anchors.
+
+The custom section remains native Blender curve geometry throughout these operations.
+
+## Commit, Edit and Recommit
+
+The standard CPC workflow continues to work with mixed CPC/Bézier profiles:
+
+```text
+construct CPC components
+→ adopt native Blender Bézier
+→ continue CPC construction
+→ Commit
+→ Edit Active Profile
+→ edit native Bézier or CPC parts
+→ Recommit
+```
+
+On Commit, CPC stores the custom Bézier section inside the profile recipe rather than treating it as an external dependency.
+
+On **Edit Active Profile**, CPC reconstructs the custom section as a native Blender Bézier Curve with its editable control points and handles restored.
+
+Recommit preserves the committed profile object's identity, so existing Sweep bevel-object relationships continue to work as in 0.4.4.
+
+## User Profiles and custom Bézier presets
+
+Mixed CPC/Bézier profiles can be saved as normal CPC User Profile presets.
+
+A PARAMETRIC preset may now contain both:
+
+```text
+semantic CPC recipe records
++
+CUSTOM_BEZIER recipe records
+```
+
+The custom Bézier payload remains part of the reusable CPC recipe.
+
+0.4.6 also updates preset validation so `CUSTOM_BEZIER` records are recognized as valid PARAMETRIC recipe members even though they intentionally do not use a CPC `primitive_id`.
+
+This means custom Bézier presets:
+
+- remain visible after Refresh Library;
+- remain visible after Blender restart or extension reinstall;
+- can be loaded like existing 0.4.4 PARAMETRIC presets;
+- preserve native Bézier reconstruction on Edit/Recommit.
+
+Existing CPC 0.4.4 `.cpcprofile` presets remain compatible.
+
+## User Profile library
+
+The indexed User Profiles system remains unchanged in principle.
+
+Retained capabilities include:
+
+- user-managed Categories;
+- global Search;
+- indexed preset metadata;
+- Tags and Source information;
+- PNG thumbnail previews;
+- metadata-only Edit Info;
+- PARAMETRIC and STATIC presets;
+- persistent custom User Profile library paths.
+
+The default library remains Blender's extension-owned writable user directory.
+
+A custom library path can be configured and persists through CPC preferences.
+
+`cpc_library.json` remains the category-vocabulary registry only. Each `.cpcprofile` remains authoritative for its own geometry, recipe, identity and metadata.
+
+## 0.4.4 foundation retained in 0.4.6
+
+0.4.6 is built directly from the validated 0.4.4 release and retains its transform and connectivity model.
+
+### One authoritative complete-profile placement state
+
+Committed profiles continue to resolve through:
 
 - Offset X
 - Offset Y
@@ -24,8 +215,6 @@ A committed CPC profile now resolves through one canonical placement state:
 - Flip X
 - Flip Y
 - Uniform Scale
-
-Equivalent operations produce the same final geometry whether they are applied before placement or after placement.
 
 ```text
 canonical profile geometry
@@ -36,11 +225,7 @@ canonical profile geometry
 → path / sweep frame
 ```
 
-The same state is used by placement, editing, reload, Recommit and Sweep.
-
 ### Blender G / R / S integration
-
-Normal Blender transforms now edit CPC semantics instead of creating a second transform authority.
 
 For committed profiles:
 
@@ -50,62 +235,35 @@ R → CPC Rotation
 S → CPC Uniform Scale
 ```
 
-CPC numeric controls, viewport interaction and supported Blender transforms therefore remain synchronized.
+Normal Blender transforms therefore continue to edit CPC semantic placement rather than creating a second persistent transform authority.
 
 ## Semantic component Size
 
-Construction components use their semantic dimensions as the source of truth for size.
-
-A component resize updates relevant dimensional parameters, regenerates the component and restores neutral Blender Object Scale.
+Normal CPC construction components still resize through semantic construction dimensions rather than arbitrary Object Scale.
 
 ```text
 resize
-→ uniform size factor
-→ dimensional construction parameters
+→ dimensional CPC parameters
 → regenerate
 → Object Scale = 1,1,1
 ```
 
-Length-valued parameters such as Width, Height, Chord, Depth and Fillet dimensions are scaled. Dimensionless controls such as Bias, Fullness, flips and construction mode are not.
+Length-valued parameters such as Width, Height, Chord, Depth and Fillet dimensions are scaled.
 
-Component Size is available through:
+Dimensionless controls such as Bias, Fullness, flips and construction mode remain unchanged.
+
+Component Size continues to be available through:
 
 - mouse wheel during placement;
 - Blender `S`;
 - selected-part panel **Size**;
 - viewport HUD **Size**.
 
-Packed architectural components resize through their controller/construction parameters rather than arbitrary child transforms.
-
-## Component Size vs profile Uniform Scale
-
-These operations are intentionally different.
-
-| Editing target | Meaning of scaling |
-|---|---|
-| Construction component | Change semantic construction dimensions and regenerate |
-| Committed complete profile | Change placement-level **Uniform Scale** |
-
-For a component:
-
-```text
-S 1.5
-→ construction dimensions × 1.5
-→ regenerate
-→ Object Scale = 1,1,1
-```
-
-For a committed profile:
-
-```text
-S 1.5
-→ CPC Uniform Scale = 1.5
-→ rebuild canonical profile placement
-```
+Custom Bézier sections intentionally do **not** expose semantic CPC Size parameters. Their internal shape is edited with Blender's native curve tools.
 
 ## Rotation and Size controls
 
-For an individual construction component:
+For an individual semantic CPC construction component:
 
 - **Rotation** edits `cpc_part_rotation`;
 - **Size** performs semantic uniform resizing.
@@ -115,7 +273,7 @@ For a committed complete profile:
 - **Rotation** edits profile placement Rotation;
 - **Uniform Scale** edits profile placement Uniform Scale.
 
-Panel and HUD pointer gestures share the same modifier model:
+Panel and HUD pointer gestures retain the established modifier model:
 
 | Input | Behaviour |
 |---|---|
@@ -127,108 +285,19 @@ Panel and HUD pointer gestures share the same modifier model:
 
 ## Reconnect Touching Endpoints
 
-CPC distinguishes physical coincidence from semantic connectivity.
+CPC continues to distinguish physical coincidence from semantic connectivity.
 
-Two endpoints may occupy the same position without sharing a CPC junction relationship. This is intentional: proximity alone must not silently alter construction topology.
+Two endpoints may occupy the same position without sharing a CPC junction relationship.
 
-**Reconnect Touching Endpoints** explicitly rebuilds semantic endpoint relationships.
+**Reconnect Touching Endpoints** explicitly rebuilds semantic endpoint relationships without moving geometry.
 
-```text
-snap endpoints together
-→ Reconnect Touching Endpoints
-→ CPC junction metadata rebuilt
-→ Maintain Connected works again
-```
+Custom Bézier start/end anchors participate in this same junction system.
 
-The operator:
-
-1. scans eligible CPC construction endpoints;
-2. detects coincident endpoints within `merge_tolerance`;
-3. preserves a stable existing junction ID where possible, otherwise creates one;
-4. rebuilds the affected semantic chain;
-5. updates metadata without moving geometry.
-
-## User Profiles in 0.4.4
-
-The indexed User Profiles system introduced in **0.4.3 remains the library foundation in 0.4.4**.
-
-Retained capabilities include:
-
-- user-managed Categories;
-- global Search;
-- indexed preset metadata;
-- Tags and Source information;
-- PNG thumbnail previews;
-- metadata-only Edit Info;
-- PARAMETRIC and STATIC presets.
-
-These are retained 0.4.3 features rather than the main focus of 0.4.4.
-
-### Browser behaviour
-
-With Search empty:
-
-```text
-metadata index
-→ selected Category
-→ visible presets
-```
-
-With Search non-empty:
-
-```text
-metadata index
-→ global search across all categories
-→ visible presets
-```
-
-Search temporarily ignores the selected Category without overwriting it. Clearing Search returns to that Category.
-
-`All Categories` is a virtual filter. `Uncategorized` is the fallback for presets without category metadata.
-
-### Preset classes
-
-- **PARAMETRIC** presets retain CPC recipe state and remain editable when their geometry-authority information is valid.
-- **STATIC** presets preserve normalized curve geometry without claiming parametric reconstructability.
-
-### Preset metadata
-
-Optional classification/source metadata remains part of `.cpcprofile` format v1:
-
-```json
-{
-  "classification": {
-    "category": "Cornice / Crown",
-    "tags": ["georgian", "classical"]
-  },
-  "source": {
-    "collection": "Reference Library",
-    "reference": "CRN-001",
-    "url": "",
-    "license": ""
-  }
-}
-```
-
-## Persistent User Profile library
-
-The default library remains Blender's extension-owned writable user directory.
-
-A custom User Profile folder can also be selected. In 0.4.4 the custom path is persisted through CPC preferences so it survives Blender restart and new-file workflows unless an explicit scene path overrides it.
-
-When CPC activates a library without a registry, it initializes:
-
-```text
-cpc_library.json
-```
-
-The registry stores the ordered category vocabulary only. It is not a preset database; each `.cpcprofile` remains authoritative for its own geometry, recipe, identity and metadata.
-
-PNG previews remain regenerable cache artifacts. CPC uses Blender's Image API and has no Pillow/PIL dependency.
+During initial adoption CPC only tests the adopted Bézier's own start/end anchors for touching CPC endpoints; unrelated touching parts elsewhere in the construction are not automatically reconnected.
 
 ## Sweep Caps and Fill Mode
 
-0.4.4 makes CPC **Caps** authoritative for 2D sweep fill behaviour.
+The 0.4.4 Caps behaviour remains authoritative for 2D sweep fill.
 
 For a 2D CPC sweep/path:
 
@@ -242,54 +311,65 @@ Caps ON
 → Fill Mode = Both
 ```
 
-Changing Caps on an active CPC sweep updates the Curve data live. Applying a profile to an existing 2D Curve also respects the current Caps state.
+3D paths retain Blender-supported bevel-cap behaviour.
 
-3D paths retain Blender's supported bevel-cap behaviour without forcing a 2D Fill Mode value.
-
-## Commit, Edit and Recommit
-
-The established CPC workflow remains:
-
-```text
-construct profile
-→ Commit
-→ Edit Active Profile
-→ modify CPC construction
-→ Recommit
-```
-
-0.4.4 preserves committed-object identity, normalized Profile Frame storage, packed component restoration and Sweep bevel-object linkage.
+Mixed CPC/Bézier profiles can be committed and used as Sweep profiles in the same way as ordinary CPC profiles.
 
 ## Compatibility
 
-0.4.4 preserves:
+0.4.6 preserves:
 
 - `.cpcprofile` format v1;
+- existing 0.4.4 User Profiles;
 - recipe schema 11+;
 - transform schema 1 using `matrix_profile`;
-- complete-profile placement schema 1 using `cpc_profile_placement_json`;
+- complete-profile placement schema 1;
 - independent `cpc_part_rotation`;
 - PARAMETRIC / STATIC provenance rules;
 - geometry-authority hashing;
 - profile normalization;
 - packed component restoration;
 - Commit → Edit Active Profile → Recommit;
-- 0.4.3 User Profile categories, search and metadata;
+- Categories, Search, Tags and Source metadata;
+- persistent custom library paths;
 - lazy viewport-overlay activation required by Blender Extensions.
+
+0.4.6 adds a new recipe member type:
+
+```text
+component_type = CUSTOM_BEZIER
+```
+
+which stores native Bézier data alongside ordinary CPC primitive records.
+
+## 0.4.5 development note
+
+The earlier 0.4.5 edit-point / S-curve experiment was intentionally abandoned.
+
+It is not part of the supported development lineage.
+
+0.4.6 branches directly from the validated 0.4.4 baseline and replaces the specialised edit-point direction with the more general native Blender Bézier workflow.
 
 ## Validation
 
-0.4.4 passed the automated release gate with **52/52 tests** and was production-validated in Blender against:
+The 0.4.4 foundation was previously validated through the full transform, connectivity, preset and Sweep regression set.
 
-- CRN-4000
-- CRN-4001
-- CRN-4002
-- CRN-4003
-- CRN-4004
+The new 0.4.6 Custom Bézier workflow has been manually validated in Blender for:
 
-The validation set covers combined placement transforms, pre/post placement equivalence, Blender G/R/S, component sizing, panel/HUD modifiers, Object Scale normalization, endpoint reconnection, Maintain Connected, save/reload, Edit/Recommit and Sweep.
+- adopting an existing native Blender Bézier;
+- preserving its original shape and handle positions during adoption;
+- native Bézier handle editing;
+- endpoint connection to CPC components;
+- Maintain Connected propagation;
+- rotation and connected transforms;
+- Commit;
+- Edit Active Profile;
+- Recommit;
+- User Profile save/load;
+- preset refresh/re-indexing;
+- compatibility with existing 0.4.4 presets.
 
-See [VALIDATION_Curve_Profile_Creator_0.4.4.md](VALIDATION_Curve_Profile_Creator_0.4.4.md) for the complete validation matrix.
+A dedicated regression test also verifies that `CUSTOM_BEZIER` records remain valid members of PARAMETRIC `.cpcprofile` recipes while ordinary semantic CPC records still require a valid `primitive_id`.
 
 ## Documentation
 
@@ -297,7 +377,8 @@ See [VALIDATION_Curve_Profile_Creator_0.4.4.md](VALIDATION_Curve_Profile_Creator
 - [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)
 - [CHANGELOG.md](CHANGELOG.md)
 - [ROADMAP.md](ROADMAP.md)
+- [0.4.6 Custom Bézier Integration Design](docs/superpowers/specs/2026-10-07-cpc-0.4.6-custom-bezier-integration-design.md)
 
-## 0.4.4 in one sentence
+## 0.4.6 in one sentence
 
-**Curve Profile Creator 0.4.4 makes transforms, resizing and connectivity semantic and predictable: complete profiles use one placement model, components resize through construction dimensions, snapped endpoints can be explicitly reconnected, User Profile locations persist, and 2D Sweep Caps behave consistently.**
+**Curve Profile Creator 0.4.6 lets structured CPC construction hand off to Blender's native Bézier modelling and return to CPC without losing connectivity, editable handles, Commit/Recommit, presets or Sweep workflows.**
