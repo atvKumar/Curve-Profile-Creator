@@ -1,5 +1,36 @@
 # Curve Profile Creator — Changelog
 
+## Curve Profile Creator — 0.4.7
+
+### Custom Bézier Creation
+
+- Adds **Add Custom Bézier** for direct CPC → native Blender Bézier continuation.
+- Creates a native two-point Bézier seed from the endpoint opposite the selected CPC part's Edit Anchor.
+- Places P0 on the CPC continuation endpoint and uses it as the custom section local origin.
+- Places P1 along the source endpoint's outward tangent.
+- Initializes both points with explicit collinear Blender **ALIGNED** handles.
+- Enters native Blender Edit Mode when context permits so the user can immediately reshape/extrude the custom section.
+- Keeps ALIGNED as a creation default only; Commit/Recommit preserves the actual later-edited handle coordinates and types.
+- Prevents silent endpoint branching when the chosen continuation endpoint is already semantically connected downstream.
+- Retains **Adopt Selected Blender Bézier** and reuses the same `CUSTOM_BEZIER` persistence model introduced in 0.4.6.
+- Validated CPC → Bézier → CPC chaining, Edit Anchor reversal, downstream CPC continuation, Maintain Connected, Commit/Edit/Recommit and User Profile compatibility.
+- Automated source gate: **55/55 tests passed**.
+
+## Curve Profile Creator — 0.4.6
+
+### Native Blender Bézier Integration
+
+- Adds **Adopt Selected Blender Bézier** for bringing an existing native Blender Bézier Curve into a CPC construction chain.
+- Stores native control-point coordinates, left/right handles, Blender handle types, radius, tilt, soft-body weight and spline resolution in the CPC recipe.
+- Uses the first Bézier point as the custom section local origin and the last point as the exit anchor.
+- Preserves native freeform editability across Commit → Edit Active Profile → Recommit.
+- Integrates custom sections with CPC endpoint junctions, Maintain Connected and connected Move/Rotate behaviour.
+- Preserves the user-drawn curve during adoption by rebasing the Curve datablock rigidly rather than moving constrained handles individually.
+- Supports Free, Vector, Aligned, Auto and Auto Clamped native Blender handle types.
+- Updates PARAMETRIC preset validation so `CUSTOM_BEZIER` recipe members remain indexable after library refresh/restart without requiring a CPC `primitive_id`.
+- Retains `.cpcprofile` v1, recipe schema 11+ and transform schema 1.
+- Existing 0.4.4 User Profiles remain compatible.
+
 ## Curve Profile Creator — 0.4.4
 
 ### Transform and Connectivity
