@@ -451,7 +451,18 @@ class CPC_PT_Main(Panel):
             info.enabled = False
             info.label(text="Select a CPC construction part to edit it")
 
-        adopt = box.row()
+        custom = box.box()
+        custom.label(text="Custom Bézier", icon='CURVE_BEZCURVE')
+        add = custom.row()
+        add.operator(
+            "cpc.add_custom_bezier",
+            text="Add Custom Bézier",
+            icon='ADD',
+        )
+        hint = custom.row()
+        hint.enabled = False
+        hint.label(text="2 points • forward tangent • Aligned handles")
+        adopt = custom.row()
         adopt.operator(
             "cpc.adopt_bezier_part",
             text="Adopt Selected Blender Bézier",
