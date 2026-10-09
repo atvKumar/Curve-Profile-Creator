@@ -6,7 +6,7 @@ CPC is construction-first: semantic primitives and architectural components rema
 
 **0.4.7 completes the direct CPC → Blender Bézier → CPC workflow.**
 
-- **Blender:** 4.3 or newer
+- **Blender:** 5.2 or newer
 - **Persistence baseline:** CPC 0.4.0
 - **Recipe schema:** 11+
 - **Preset format:** `.cpcprofile` v1
