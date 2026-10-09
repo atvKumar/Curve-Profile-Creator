@@ -178,3 +178,33 @@ Automatic tangent continuity, tangent inheritance and deformation propagation ar
 The first implementation spike should adopt an already-created Blender Bézier curve into a CPC chain.
 
 A CPC-specific custom-curve drawing mode may later automate creation of the same underlying native representation, but it must not introduce a separate curve model.
+
+### DD-038 — 0.4.7 creates the same native CUSTOM_BEZIER representation
+**Add Custom Bézier** is a convenience workflow over the validated 0.4.6 custom-section model.
+
+It must create a normal Blender Bézier Curve and immediately register it as the same `CUSTOM_BEZIER` recipe member used by adopted curves. No second persistence format, point representation or reconstruction path is introduced.
+
+### DD-039 — Custom Bézier creation starts with two tangent-aligned points
+The selected CPC part's endpoint opposite its current Edit Anchor is treated as the continuation endpoint.
+
+P0 is placed on that endpoint and remains the custom section's local origin. P1 is created along the endpoint's outward tangent so the new section begins with a meaningful continuation direction instead of an arbitrary default orientation.
+
+### DD-040 — ALIGNED is the 0.4.7 creation default
+Both initial control points use explicit collinear Blender `ALIGNED` handles.
+
+CPC positions the complete handle geometry first and only then enables the ALIGNED constraint. The creation step therefore starts from handle coordinates that already satisfy Blender's alignment rule instead of asking Blender to reshape an existing curve to satisfy a newly applied handle type.
+
+### DD-041 — Creation defaults do not become Commit/Recommit policy
+ALIGNED is only the initial state of a newly created custom section.
+
+After creation, Blender owns all point and handle editing. If the user changes handles to Free, Vector, Auto or another supported native type, Commit/Recommit must preserve the actual resulting handle coordinates and types rather than normalizing the section back to ALIGNED.
+
+### DD-042 — Tangent inheritance is initialisation, not continuous deformation
+0.4.7 inherits the preceding CPC endpoint tangent only when the custom section is created.
+
+Later upstream edits may reposition the section through CPC connectivity, but CPC does not continuously rotate, stretch or reshape the custom Bézier to follow changing upstream tangents.
+
+### DD-043 — Add Custom Bézier must not silently create graph branches
+If the selected continuation endpoint is already semantically connected downstream or hosted, Add Custom Bézier should refuse creation and tell the user to choose the opposite Edit Anchor or remove the existing downstream connection.
+
+This keeps the one-dimensional profile-chain workflow predictable and avoids accidental branching topology.
