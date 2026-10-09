@@ -20,7 +20,7 @@ The validated architectural rule remains:
 
 > CPC owns the connections. Blender owns the freeform curve.
 
-### Active milestone — 0.4.7 Custom Bézier Creation
+### Current validated development baseline — 0.4.7 Custom Bézier Creation
 
 0.4.7 adds a CPC-native entry point for creating the same validated `CUSTOM_BEZIER` representation without requiring the user to manually create and position a Blender curve first.
 
@@ -46,7 +46,7 @@ The validated architectural rule remains:
 - existing **Adopt Selected Blender Bézier** remains available for pre-existing/freeform curves;
 - the operator must not silently create an endpoint branch when the selected continuation endpoint is already connected downstream.
 
-#### 0.4.7 acceptance targets
+#### 0.4.7 validated acceptance
 
 1. Add Custom Bézier creates exactly two native Bézier control points;
 2. P0 coincides with the selected CPC continuation endpoint;
@@ -82,7 +82,7 @@ The 0.4.4 milestone closed issues #2 through #10 while preserving the 0.4.x pers
 The following are candidates, not commitments:
 
 - optional tangent-follow behaviour for custom Bézier connections after positional attachment is proven;
-- optional additional creation handle modes after the ALIGNED workflow is validated in production;
+- optional additional creation handle modes if production use shows they are useful;
 - WebP preview storage using Blender-native APIs while continuing to read existing PNG previews;
 - batch migration/export of existing Blender curve/profile asset collections into `.cpcprofile` libraries;
 - explicit category merge/delete if production use justifies it;
