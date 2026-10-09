@@ -1,4 +1,4 @@
-# Curve Profile Creator — 0.4.6 Development
+# Curve Profile Creator — 0.4.7 Development
 
 ## Design Decisions
 
