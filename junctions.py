@@ -55,7 +55,7 @@ def reconnect_eligible(obj):
         obj
         and getattr(obj, "type", "") == "CURVE"
         and obj.get("cpc_part")
-        and obj.get("cpc_parametric")
+        and (obj.get("cpc_parametric") or obj.get("cpc_custom_bezier"))
         and not obj.get("cpc_preview")
     )
 

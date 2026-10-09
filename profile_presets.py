@@ -151,8 +151,20 @@ def validate_preset_document(data: Mapping) -> dict:
         for record in recipe["records"]:
             if not isinstance(record, Mapping):
                 raise PresetFormatError("PARAMETRIC recipe record must be a JSON object")
-            if not str(record.get("primitive_id", "") or "").strip():
+
+            component_type = str(record.get("component_type", "") or "").strip().upper()
+            if component_type == "CUSTOM_BEZIER":
+                custom = record.get("custom_bezier")
+                if not isinstance(custom, Mapping):
+                    raise PresetFormatError("CUSTOM_BEZIER recipe record has no Bézier payload")
+                if str(custom.get("spline_type", "") or "").upper() != "BEZIER":
+                    raise PresetFormatError("CUSTOM_BEZIER recipe payload is not Bézier")
+                points = custom.get("points")
+                if not isinstance(points, list) or len(points) < 2:
+                    raise PresetFormatError("CUSTOM_BEZIER recipe has fewer than two control points")
+            elif not str(record.get("primitive_id", "") or "").strip():
                 raise PresetFormatError("PARAMETRIC recipe record has no primitive_id")
+
             if record.get("matrix_profile") is None:
                 raise PresetFormatError("PARAMETRIC recipe record has no matrix_profile")
     return result

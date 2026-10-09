@@ -1,7 +1,7 @@
 import os
 import bpy
 import bmesh
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 
 def set_curve_fill_both(curve):
@@ -389,13 +389,15 @@ def bezier_splines_world(obj):
         for point_index, bp in enumerate(spline.bezier_points):
             left_type = str(bp.handle_left_type)
             right_type = str(bp.handle_right_type)
-            # CPC's canonical primitives use explicit FREE/VECTOR semantics.
-            # Automatic/aligned legacy handles can be recalculated by Blender
-            # when neighboring topology changes, so use sampled fallback rather
-            # than claim an exact preservation we cannot guarantee.
-            if left_type not in {'FREE', 'VECTOR'} or right_type not in {'FREE', 'VECTOR'}:
+            # 0.4.6 custom Bézier adoption preserves Blender's native handle
+            # semantics instead of restricting committed geometry to CPC's
+            # canonical FREE/VECTOR subset. AUTO/AUTO_CLAMPED are reconstructed
+            # from the same control points and neighbouring topology; ALIGNED
+            # retains Blender's native alignment constraint.
+            supported_handle_types = {'FREE', 'VECTOR', 'ALIGNED', 'AUTO', 'AUTO_CLAMPED'}
+            if left_type not in supported_handle_types or right_type not in supported_handle_types:
                 return None, (
-                    f"spline {index + 1} point {point_index + 1} uses "
+                    f"spline {index + 1} point {point_index + 1} uses unsupported "
                     f"{left_type}/{right_type} handles"
                 )
             points.append({
@@ -411,6 +413,206 @@ def bezier_splines_world(obj):
         result.append(points)
 
     return result, ""
+
+
+def serialize_custom_bezier(obj):
+    """Serialize one open native Blender Bézier spline in object-local space.
+
+    0.4.6 deliberately starts with a single-spline adoption spike. Keeping the
+    geometry local to the object lets CPC move the component by its placement
+    matrix without rewriting control points/handles during Maintain Connected.
+    """
+    if not obj or obj.type != 'CURVE':
+        raise ValueError("Select a Blender Curve object")
+    if len(obj.data.splines) != 1:
+        raise ValueError("Custom Bézier adoption currently requires exactly one spline")
+
+    spline = obj.data.splines[0]
+    if spline.type != 'BEZIER':
+        raise ValueError("Custom curve must use a Bézier spline")
+    if spline.use_cyclic_u:
+        raise ValueError("Custom Bézier adoption currently supports open splines only")
+    if len(spline.bezier_points) < 2:
+        raise ValueError("Custom Bézier needs at least two control points")
+
+    points = []
+    for bp in spline.bezier_points:
+        points.append({
+            "co": [float(v) for v in bp.co],
+            "handle_left": [float(v) for v in bp.handle_left],
+            "handle_right": [float(v) for v in bp.handle_right],
+            "handle_left_type": str(bp.handle_left_type),
+            "handle_right_type": str(bp.handle_right_type),
+            "radius": float(bp.radius),
+            "tilt": float(bp.tilt),
+            "weight_softbody": float(bp.weight_softbody),
+        })
+
+    return {
+        "version": 1,
+        "spline_type": "BEZIER",
+        "cyclic": False,
+        "resolution_u": int(getattr(spline, "resolution_u", 12)),
+        "curve_resolution_u": int(getattr(obj.data, "resolution_u", 12)),
+        "render_resolution_u": int(getattr(obj.data, "render_resolution_u", 24)),
+        "points": points,
+    }
+
+
+def rebase_custom_bezier_to_start(obj):
+    """Move object origin to the first Bézier point without changing its shape.
+
+    Do not assign Bézier co/handle coordinates one-by-one here. Blender's
+    ALIGNED/AUTO handle rules may update the opposite handle during those RNA
+    assignments and visibly distort the user's curve. Transforming the Curve
+    datablock applies one rigid translation to points and handles together,
+    preserving Blender's native handle relationships.
+    """
+    serialize_custom_bezier(obj)  # Validate before mutating anything.
+
+    # Do not alter other objects that happen to share this Curve datablock.
+    if getattr(obj.data, "users", 1) > 1:
+        obj.data = obj.data.copy()
+
+    spline = obj.data.splines[0]
+    start = spline.bezier_points[0].co.copy()
+    if start.length_squared <= 1.0e-20:
+        return serialize_custom_bezier(obj)
+
+    local_shift = Matrix.Translation(-start)
+
+    transform = getattr(obj.data, "transform", None)
+    if callable(transform):
+        # One datablock transform keeps co + both handles moving rigidly as a
+        # unit, so ALIGNED/AUTO constraints never see an intermediate state.
+        transform(local_shift)
+    else:
+        # Compatibility fallback: temporarily FREE the handles, perform the
+        # same rigid translation from a complete snapshot, then restore the
+        # user's native handle types.
+        snapshots = []
+        for bp in spline.bezier_points:
+            snapshots.append({
+                "co": bp.co.copy(),
+                "handle_left": bp.handle_left.copy(),
+                "handle_right": bp.handle_right.copy(),
+                "handle_left_type": str(bp.handle_left_type),
+                "handle_right_type": str(bp.handle_right_type),
+            })
+            bp.handle_left_type = 'FREE'
+            bp.handle_right_type = 'FREE'
+
+        for bp, saved in zip(spline.bezier_points, snapshots):
+            bp.co = saved["co"] - start
+            bp.handle_left = saved["handle_left"] - start
+            bp.handle_right = saved["handle_right"] - start
+
+        for bp, saved in zip(spline.bezier_points, snapshots):
+            bp.handle_left_type = saved["handle_left_type"]
+            bp.handle_right_type = saved["handle_right_type"]
+
+    # Compensate in object space so every world-space control point/handle
+    # remains exactly where the user drew it. Only the component-local origin
+    # changes: the first Bézier point becomes (0, 0, 0).
+    obj.matrix_world = obj.matrix_world @ Matrix.Translation(start)
+    obj.update_tag()
+
+    return serialize_custom_bezier(obj)
+
+
+
+def create_aligned_custom_bezier_seed(name, start_world, tangent_world, length, collection):
+    """Create a two-point native Bézier seed aligned to a CPC endpoint tangent.
+
+    The first control point is the CPC attachment/local origin.  The second
+    point lies on the source endpoint's outward tangent.  Both points use
+    explicit collinear ALIGNED handles so Blender starts from a smooth,
+    predictable native Bézier without relying on AUTO handle recalculation.
+    """
+    start = Vector(start_world)
+    tangent = Vector(tangent_world)
+    tangent.z = 0.0
+    if tangent.length <= 1.0e-10:
+        raise ValueError("Cannot create Custom Bézier: source endpoint has no usable tangent")
+    tangent.normalize()
+
+    length = max(float(length), 1.0e-6)
+    handle_length = length / 3.0
+
+    curve = bpy.data.curves.new(name=f"{name}_Curve", type='CURVE')
+    curve.dimensions = '2D'
+    curve.resolution_u = 12
+    curve.render_resolution_u = 24
+    set_curve_fill_both(curve)
+
+    spline = curve.splines.new('BEZIER')
+    spline.bezier_points.add(1)
+    spline.resolution_u = 12
+
+    p0 = spline.bezier_points[0]
+    p1 = spline.bezier_points[1]
+    p0.co = (0.0, 0.0, 0.0)
+    p1.co = tangent * length
+
+    # Establish the complete collinear geometry while FREE, then enable
+    # Blender's ALIGNED constraint.  Because the saved handle geometry already
+    # satisfies that constraint, enabling it does not need to reshape the seed.
+    for bp in (p0, p1):
+        bp.handle_left_type = 'FREE'
+        bp.handle_right_type = 'FREE'
+
+    p0.handle_left = -tangent * handle_length
+    p0.handle_right = tangent * handle_length
+    p1.handle_left = p1.co - tangent * handle_length
+    p1.handle_right = p1.co + tangent * handle_length
+
+    for bp in (p0, p1):
+        bp.handle_left_type = 'ALIGNED'
+        bp.handle_right_type = 'ALIGNED'
+
+    obj = bpy.data.objects.new(name, curve)
+    collection.objects.link(obj)
+    obj.matrix_world = Matrix.Translation(start)
+    obj["cpc_custom_bezier"] = True
+    return obj
+
+
+def create_custom_bezier_part(name, spec, collection):
+    """Reconstruct a CPC custom Bézier construction part from recipe-local data."""
+    if not isinstance(spec, dict):
+        raise ValueError("Custom Bézier recipe is invalid")
+    points = spec.get("points")
+    if not isinstance(points, list) or len(points) < 2:
+        raise ValueError("Custom Bézier recipe has fewer than two control points")
+
+    curve = bpy.data.curves.new(name=f"{name}_Curve", type='CURVE')
+    curve.dimensions = '2D'
+    curve.resolution_u = int(spec.get("curve_resolution_u", 12))
+    curve.render_resolution_u = int(spec.get("render_resolution_u", 24))
+    set_curve_fill_both(curve)
+
+    spline = curve.splines.new('BEZIER')
+    spline.bezier_points.add(len(points) - 1)
+    spline.resolution_u = int(spec.get("resolution_u", 12))
+
+    # Coordinates first, then native handle types. This mirrors CPC's existing
+    # Bézier writer while allowing Blender to re-establish AUTO/ALIGNED rules.
+    for bp, point in zip(spline.bezier_points, points):
+        bp.co = point.get("co", (0.0, 0.0, 0.0))
+        bp.handle_left = point.get("handle_left", point.get("co", (0.0, 0.0, 0.0)))
+        bp.handle_right = point.get("handle_right", point.get("co", (0.0, 0.0, 0.0)))
+        bp.radius = float(point.get("radius", 1.0))
+        bp.tilt = float(point.get("tilt", 0.0))
+        bp.weight_softbody = float(point.get("weight_softbody", 0.0))
+
+    for bp, point in zip(spline.bezier_points, points):
+        bp.handle_left_type = str(point.get("handle_left_type", "FREE"))
+        bp.handle_right_type = str(point.get("handle_right_type", "FREE"))
+
+    obj = bpy.data.objects.new(name, curve)
+    collection.objects.link(obj)
+    obj["cpc_custom_bezier"] = True
+    return obj
 
 
 def _reverse_bezier_points(points):

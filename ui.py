@@ -252,7 +252,11 @@ def _selected_cpc_part(context):
     obj = context.object
     if not obj or obj.type != 'CURVE':
         return None
-    if not obj.get("cpc_part") or not obj.get("cpc_parametric") or obj.get("cpc_preview"):
+    if (
+        not obj.get("cpc_part")
+        or not (obj.get("cpc_parametric") or obj.get("cpc_custom_bezier"))
+        or obj.get("cpc_preview")
+    ):
         return None
     return obj
 
@@ -332,6 +336,23 @@ class CPC_PT_Main(Panel):
             note.label(text="Only semantic parameters valid for the selected component are shown")
 
     def _draw_selected_part(self, box, context, settings, selected):
+        if selected.get("cpc_custom_bezier"):
+            selected_box = box.box()
+            selected_box.label(text=f"Selected Part • Custom Bézier • {selected.name}", icon='OUTLINER_OB_CURVE')
+            note = selected_box.row()
+            note.enabled = False
+            note.label(text="Native Blender control points + handles • first point is CPC local origin")
+            note = selected_box.row()
+            note.enabled = False
+            note.label(text="Tab/Edit Mode to reshape • CPC preserves entry/exit connectivity")
+            selected_box.prop(settings, "maintain_connected_parts", text="Maintain Connected Parts")
+            selected_box.operator(
+                "cpc.reconnect_touching_endpoints",
+                text="Reconnect Touching Endpoints",
+                icon='AUTOMERGE_ON',
+            )
+            return
+
         primitive_id = str(selected.get("cpc_primitive_id", "LINE"))
         primitive_name = str(selected.get("cpc_primitive_name", primitive_id))
         role = str(selected.get("cpc_role", "") or "").replace('_', ' ').title()
@@ -429,6 +450,24 @@ class CPC_PT_Main(Panel):
             info = box.row()
             info.enabled = False
             info.label(text="Select a CPC construction part to edit it")
+
+        custom = box.box()
+        custom.label(text="Custom Bézier", icon='CURVE_BEZCURVE')
+        add = custom.row()
+        add.operator(
+            "cpc.add_custom_bezier",
+            text="Add Custom Bézier",
+            icon='ADD',
+        )
+        hint = custom.row()
+        hint.enabled = False
+        hint.label(text="2 points • forward tangent • Aligned handles")
+        adopt = custom.row()
+        adopt.operator(
+            "cpc.adopt_bezier_part",
+            text="Adopt Selected Blender Bézier",
+            icon='OUTLINER_OB_CURVE',
+        )
 
         editing_profile_id = str(getattr(settings, "editing_profile_id", "") or "").strip()
         if editing_profile_id:

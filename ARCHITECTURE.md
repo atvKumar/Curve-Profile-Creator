@@ -1,4 +1,4 @@
-# Curve Profile Creator — 0.4.4
+# Curve Profile Creator — 0.4.7
 
 ## Architecture
 
@@ -22,7 +22,7 @@ Supported persistent data begins with the 0.4.x baseline:
 - geometry-authority hash for editable preset certification;
 - complete-profile placement schema: **1**, stored as `cpc_profile_placement_json`.
 
-0.4.4 adds canonical complete-profile placement and semantic interaction without advancing recipe, transform or preset schemas. The optional User Profile classification/source metadata introduced in 0.4.3 remains compatible.
+0.4.4 added canonical complete-profile placement and semantic interaction without advancing recipe, transform or preset schemas. 0.4.6 added native `CUSTOM_BEZIER` recipe members, and 0.4.7 adds direct tangent-aware creation of that same representation. No new recipe, transform or preset schema version is required. The optional User Profile classification/source metadata introduced in 0.4.3 remains compatible.
 
 ### Complete-profile transform model
 
@@ -76,6 +76,44 @@ The following interaction paths use the same semantic resize backend:
 The resize factor is applied to length-valued construction parameters and packed-controller dimensions, then the component is regenerated. Dimensionless parameters remain unchanged.
 
 Accepted or cancelled component Size gestures leave affected Blender Object Scale at `1,1,1`.
+
+### Custom Bézier component model
+
+0.4.6/0.4.7 allow a native Blender Bézier spline to participate as a CPC construction part without introducing a second curve solver.
+
+A custom section is marked as `cpc_part` + `cpc_custom_bezier` and persists through a recipe record with:
+
+```text
+component_type = CUSTOM_BEZIER
+```
+
+The record stores native local Bézier data rather than a sampled polyline:
+
+- control-point coordinates;
+- left/right handle coordinates;
+- left/right Blender handle types;
+- radius;
+- tilt;
+- soft-body weight;
+- spline/curve resolution;
+- normal CPC component transform and endpoint metadata.
+
+The first Bézier point is the component-local origin/entry anchor. The final point is the exit anchor.
+
+```text
+local Bézier geometry
+→ component matrix_profile
+→ complete-profile placement
+→ world
+```
+
+**Adopt Selected Blender Bézier** rebases an existing native curve so its first point becomes local origin without changing world-space geometry. Constrained handle types are preserved by applying a rigid Curve-datablock transform rather than moving handles independently.
+
+**Add Custom Bézier** creates the same persistent representation directly from a CPC continuation endpoint. It creates two points: P0 at the continuation endpoint and P1 along the endpoint's outward tangent. Initial handle geometry is explicitly collinear and then assigned Blender `ALIGNED` handle types.
+
+ALIGNED is creation state only. After creation Blender remains authoritative for native point/handle editing. Commit/Recommit serializes and restores the actual handle geometry/types rather than normalizing them back to the creation default.
+
+Maintain Connected treats the custom section as a rigid construction component. Upstream positional changes update component placement; CPC does not continuously deform the local Bézier to chase later tangent changes.
 
 ### Committed profile editing
 
