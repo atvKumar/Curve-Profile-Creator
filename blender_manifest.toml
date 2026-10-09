@@ -7,6 +7,7 @@ tagline = "Build parametric curve profiles and sweep them along edges"
 maintainer = "M.Kumaran"
 support = "https://github.com/atvKumar/Curve-Profile-Creator/issues"
 type = "add-on"
+tags = ["Modeling", "Add Curve", "3D View"]
 
 blender_version_min = "5.2.0"
 
