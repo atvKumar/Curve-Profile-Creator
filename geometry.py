@@ -520,6 +520,63 @@ def rebase_custom_bezier_to_start(obj):
     return serialize_custom_bezier(obj)
 
 
+
+def create_aligned_custom_bezier_seed(name, start_world, tangent_world, length, collection):
+    """Create a two-point native Bézier seed aligned to a CPC endpoint tangent.
+
+    The first control point is the CPC attachment/local origin.  The second
+    point lies on the source endpoint's outward tangent.  Both points use
+    explicit collinear ALIGNED handles so Blender starts from a smooth,
+    predictable native Bézier without relying on AUTO handle recalculation.
+    """
+    start = Vector(start_world)
+    tangent = Vector(tangent_world)
+    tangent.z = 0.0
+    if tangent.length <= 1.0e-10:
+        raise ValueError("Cannot create Custom Bézier: source endpoint has no usable tangent")
+    tangent.normalize()
+
+    length = max(float(length), 1.0e-6)
+    handle_length = length / 3.0
+
+    curve = bpy.data.curves.new(name=f"{name}_Curve", type='CURVE')
+    curve.dimensions = '2D'
+    curve.resolution_u = 12
+    curve.render_resolution_u = 24
+    set_curve_fill_both(curve)
+
+    spline = curve.splines.new('BEZIER')
+    spline.bezier_points.add(1)
+    spline.resolution_u = 12
+
+    p0 = spline.bezier_points[0]
+    p1 = spline.bezier_points[1]
+    p0.co = (0.0, 0.0, 0.0)
+    p1.co = tangent * length
+
+    # Establish the complete collinear geometry while FREE, then enable
+    # Blender's ALIGNED constraint.  Because the saved handle geometry already
+    # satisfies that constraint, enabling it does not need to reshape the seed.
+    for bp in (p0, p1):
+        bp.handle_left_type = 'FREE'
+        bp.handle_right_type = 'FREE'
+
+    p0.handle_left = -tangent * handle_length
+    p0.handle_right = tangent * handle_length
+    p1.handle_left = p1.co - tangent * handle_length
+    p1.handle_right = p1.co + tangent * handle_length
+
+    for bp in (p0, p1):
+        bp.handle_left_type = 'ALIGNED'
+        bp.handle_right_type = 'ALIGNED'
+
+    obj = bpy.data.objects.new(name, curve)
+    collection.objects.link(obj)
+    obj.matrix_world = Matrix.Translation(start)
+    obj["cpc_custom_bezier"] = True
+    return obj
+
+
 def create_custom_bezier_part(name, spec, collection):
     """Reconstruct a CPC custom Bézier construction part from recipe-local data."""
     if not isinstance(spec, dict):
