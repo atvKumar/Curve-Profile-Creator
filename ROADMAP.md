@@ -1,51 +1,63 @@
-# Curve Profile Creator — 0.4.6 Development
+# Curve Profile Creator — 0.4.7 Development
 
 ## Roadmap
 
 ### Stable baseline — 0.4.4
 
-CPC 0.4.6 branches directly from the validated 0.4.4 release baseline. All validated 0.4.4 behaviour is to be preserved unless a later decision explicitly supersedes it.
+CPC 0.4.7 builds on the validated 0.4.6 Custom Bézier Integration line, which itself branches directly from the validated 0.4.4 release baseline. All validated 0.4.4 and 0.4.6 behaviour is to be preserved unless a later decision explicitly supersedes it.
 
 ### Historical note — 0.4.5
 
-0.4.5 is treated as an abandoned experimental point upgrade. Its edit-point / S-curve direction is not part of the active development lineage and must not be merged into 0.4.6.
+0.4.5 is treated as an abandoned experimental point upgrade. Its edit-point / S-curve direction is not part of the active development lineage and must not be merged into the active 0.4.6/0.4.7 development lineage.
 
 If the experimental 0.4.5 work is preserved on GitHub, it should be kept only as an archive/history branch rather than published as a supported release.
 
-### Active milestone — 0.4.6 Custom Bézier Integration
+### Validated milestone — 0.4.6 Custom Bézier Integration
 
-The primary 0.4.6 experiment is a mixed CPC–Blender curve workflow: a user may extend an existing CPC component chain with a native Blender Bézier section when CPC's semantic component catalogue is not appropriate for the required freeform shape.
+0.4.6 proved the mixed CPC–Blender curve model: existing native Blender Bézier curves can be adopted as CPC custom construction sections while preserving native points/handles, CPC endpoint connectivity, Maintain Connected behaviour, Commit/Recommit and User Profile persistence.
 
-#### Core requirements
+The validated architectural rule remains:
 
-- existing CPC components and their semantic controls remain unchanged;
-- construction continues to use the existing Add + Snap workflow;
-- a native/freeform Blender Bézier section can continue from a CPC component endpoint;
-- the first Bézier control point acts as the custom section's entry anchor and local origin;
-- Bézier control points, handle positions and handle types are preserved rather than sampled into static point geometry;
-- CPC Commit/Recommit must preserve native Bézier editability;
-- the final Bézier control point acts as the exit anchor for subsequent CPC components;
-- Keep Components Together must propagate positional changes through the custom section without deforming its local shape;
-- upstream motion is represented by moving the custom section's component/local transform, rather than rewriting every stored point;
-- Move All and Rotate All must continue to transform the complete assembly coherently;
-- version one requires positional continuity only; automatic tangent continuity and automatic Bézier deformation are explicitly deferred;
-- Blender remains the authority for editing the internal Bézier geometry; CPC owns connection, placement, Commit/Recommit and assembly behaviour.
+> CPC owns the connections. Blender owns the freeform curve.
 
-#### Preferred first spike
+### Active milestone — 0.4.7 Custom Bézier Creation
 
-Prototype adoption of an already-created native Blender Bézier curve before building any dedicated CPC Bézier drawing mode.
+0.4.7 adds a CPC-native entry point for creating the same validated `CUSTOM_BEZIER` representation without requiring the user to manually create and position a Blender curve first.
 
-The spike should prove:
+#### Creation workflow
 
-1. a native Bézier can be attached to a CPC endpoint;
-2. Commit/Recommit round-trips its points and handles losslessly;
-3. its entry anchor can function as the local origin;
-4. Keep Components Together can reposition it rigidly from upstream changes;
-5. Rotate All and Move All preserve the custom section and its downstream chain;
-6. a following CPC component can snap to its exit anchor;
-7. Sweep continues to operate on the resulting combined profile.
+1. select the CPC construction part to continue from;
+2. CPC uses the endpoint opposite that part's current Edit Anchor as the continuation endpoint;
+3. **Add Custom Bézier** creates a native two-point Blender Bézier section;
+4. point P0 is placed exactly on the CPC continuation endpoint and acts as the custom section's local origin;
+5. point P1 is placed along the source endpoint's outward tangent;
+6. both control points start with explicit collinear **ALIGNED** handles;
+7. CPC immediately hands the new section to Blender's native Edit Mode when context permits;
+8. the user continues shaping/extruding with Blender's normal Bézier tools;
+9. Commit/Recommit stores the actual points, handle coordinates and handle types that exist after editing.
 
-A CPC-specific Draw Custom Section mode is a possible convenience layer only after this underlying model is validated.
+#### Design constraints
+
+- 0.4.7 must reuse the existing 0.4.6 `CUSTOM_BEZIER` storage and restoration model;
+- no second CPC-specific Bézier solver or point-editing system is introduced;
+- initial tangent matching happens only at creation time;
+- Maintain Connected continues to move the custom section rigidly rather than deforming it to follow later tangent changes;
+- Commit/Recommit must never force handles back to ALIGNED after the user changes them;
+- existing **Adopt Selected Blender Bézier** remains available for pre-existing/freeform curves;
+- the operator must not silently create an endpoint branch when the selected continuation endpoint is already connected downstream.
+
+#### 0.4.7 acceptance targets
+
+1. Add Custom Bézier creates exactly two native Bézier control points;
+2. P0 coincides with the selected CPC continuation endpoint;
+3. P1 lies on the outgoing tangent of that endpoint;
+4. both initial points use Blender `ALIGNED` handles with explicit handle geometry;
+5. the seed curve does not visibly reshape when created;
+6. CPC endpoint metadata connects source endpoint → custom P0 immediately;
+7. native Blender Edit Mode can reshape/extrude the custom section normally;
+8. Commit → Edit Active Profile → Recommit preserves the actual edited handle coordinates/types;
+9. Maintain Connected and Rotate/Move behaviour remain unchanged from 0.4.6;
+10. existing 0.4.6 adopted Bézier profiles and User Profile presets remain compatible.
 
 ## 0.4.4 validated scope
 
@@ -70,7 +82,7 @@ The 0.4.4 milestone closed issues #2 through #10 while preserving the 0.4.x pers
 The following are candidates, not commitments:
 
 - optional tangent-follow behaviour for custom Bézier connections after positional attachment is proven;
-- CPC convenience drawing mode that creates native Blender Bézier points/handles;
+- optional additional creation handle modes after the ALIGNED workflow is validated in production;
 - WebP preview storage using Blender-native APIs while continuing to read existing PNG previews;
 - batch migration/export of existing Blender curve/profile asset collections into `.cpcprofile` libraries;
 - explicit category merge/delete if production use justifies it;
