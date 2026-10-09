@@ -2164,6 +2164,146 @@ class CPC_OT_ReconnectTouchingEndpoints(Operator):
         return {'FINISHED'}
 
 
+
+class CPC_OT_AddCustomBezier(Operator):
+    bl_idname = "cpc.add_custom_bezier"
+    bl_label = "Add Custom Bézier"
+    bl_description = "Create a native two-point Bézier from the selected CPC part's continuation endpoint"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        obj = getattr(context, "object", None)
+        return bool(
+            getattr(context, "mode", "OBJECT") == 'OBJECT'
+            and obj
+            and obj.type == 'CURVE'
+            and obj.get("cpc_part")
+            and not obj.get("cpc_preview")
+            and not obj.get("cpc_profile")
+        )
+
+    def execute(self, context):
+        settings = _settings(context)
+        source = getattr(context, "object", None)
+        if not source:
+            return {'CANCELLED'}
+
+        parts = _active_builder_parts(context.scene, settings)
+        if source not in parts:
+            self.report({'ERROR'}, "Selected CPC part is not in the active construction")
+            return {'CANCELLED'}
+
+        # The Edit Anchor is the fixed/back side of a construction component.
+        # Continue from the opposite endpoint so reversing the Edit Anchor also
+        # reverses which side receives the new freeform section.
+        source_anchor = 1 if int(source.get("cpc_anchor_index", 0)) else 0
+        source_endpoint = 1 - source_anchor
+
+        # Do not silently introduce a branch into the endpoint graph.
+        if junctions.hosted_attachment(source, source_endpoint):
+            self.report({'ERROR'}, "Selected continuation endpoint is already attached")
+            return {'CANCELLED'}
+
+        junction_id = junctions.endpoint_id(source, source_endpoint)
+        if junction_id:
+            for other in parts:
+                if other == source:
+                    continue
+                if any(junctions.endpoint_id(other, endpoint) == junction_id for endpoint in (0, 1)):
+                    self.report(
+                        {'ERROR'},
+                        "Selected continuation endpoint is already connected; choose the opposite Edit Anchor or remove the downstream part",
+                    )
+                    return {'CANCELLED'}
+
+        start_world = library.object_endpoint_world(source, source_endpoint)
+        tangent_world = library.object_endpoint_outward_world(source, source_endpoint)
+
+        # Scale the starter segment from the selected component rather than
+        # imposing a fixed modelling-unit length.  The user immediately enters
+        # native Edit Mode and can move/extrude P1 normally.
+        source_span = (
+            library.object_endpoint_world(source, 1)
+            - library.object_endpoint_world(source, 0)
+        ).length
+        initial_length = max(source_span * 0.5, float(settings.merge_tolerance) * 20.0, 0.001)
+
+        coll = library.ensure_builder_collection(context.scene)
+        try:
+            obj = geometry.create_aligned_custom_bezier_seed(
+                "CPC_Custom_Bezier",
+                start_world,
+                tangent_world,
+                initial_length,
+                coll,
+            )
+        except Exception as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+
+        obj["cpc_part"] = True
+        obj["cpc_custom_bezier"] = True
+        obj["cpc_preview"] = False
+        obj["cpc_seq"] = _next_seq(context.scene, settings)
+        obj["cpc_anchor_index"] = 0
+        obj["cpc_primitive_id"] = ""
+        obj["cpc_primitive_name"] = "Custom Bézier"
+        _ensure_component_id(obj)
+
+        editing_profile_id = str(getattr(settings, "editing_profile_id", "") or "").strip()
+        if editing_profile_id:
+            obj["cpc_owner_profile_id"] = editing_profile_id
+            obj.pop("cpc_build_session_id", None)
+        else:
+            session_id = _ensure_build_session(context)
+            obj["cpc_build_session_id"] = session_id
+            obj.pop("cpc_owner_profile_id", None)
+
+        obj.show_in_front = True
+        obj.hide_set(False)
+        obj.hide_render = False
+
+        parts = _active_builder_parts(context.scene, settings)
+        junctions.connect_endpoints(
+            source,
+            source_endpoint,
+            obj,
+            0,
+            objects=parts,
+        )
+        connected_transforms.sync_object(obj)
+
+        # Hand the newly created section straight to Blender's native curve
+        # editor with P1 selected.  P0 remains the CPC attachment/local origin.
+        try:
+            for selected in tuple(getattr(context, "selected_objects", ()) or ()):
+                selected.select_set(False)
+            obj.select_set(True)
+            context.view_layer.objects.active = obj
+
+            spline = obj.data.splines[0]
+            for bp in spline.bezier_points:
+                bp.select_control_point = False
+                bp.select_left_handle = False
+                bp.select_right_handle = False
+            end_point = spline.bezier_points[-1]
+            end_point.select_control_point = True
+            end_point.select_left_handle = True
+            end_point.select_right_handle = True
+            bpy.ops.object.mode_set(mode='EDIT')
+        except Exception:
+            # Creation/connectivity is still valid even when a non-3D-view
+            # context prevents automatic Edit Mode entry.
+            pass
+
+        self.report(
+            {'INFO'},
+            "Created tangent-aligned Custom Bézier with two ALIGNED control points",
+        )
+        return {'FINISHED'}
+
+
 class CPC_OT_AdoptBezierPart(Operator):
     bl_idname = "cpc.adopt_bezier_part"
     bl_label = "Adopt Selected Bézier"
@@ -3684,6 +3824,7 @@ _CLASSES = (
     CPC_OT_SetEditAnchor,
     CPC_OT_AdjustPartRotation,
     CPC_OT_ReconnectTouchingEndpoints,
+    CPC_OT_AddCustomBezier,
     CPC_OT_AdoptBezierPart,
     CPC_OT_DeleteLastPart,
     CPC_OT_ClearParts,
